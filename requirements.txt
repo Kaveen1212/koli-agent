@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+sqlalchemy
+psycopg2
+pgvector
+google-genai
+alembic
+rq
+redis
+boto3
+python-dotenv
+langchain-google-genai
+langchain-core
+langgraph
