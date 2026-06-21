@@ -24,6 +24,14 @@ LANGCHAIN_PROJECT:    str = os.getenv("LANGCHAIN_PROJECT", "koli-art-agent")
 REDIS_HOST:     str = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT:     int = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD", "")
+# Railway / Render / Fly inject a single REDIS_URL — parse it when present.
+_REDIS_URL: str = os.getenv("REDIS_URL", "")
+if _REDIS_URL:
+    import urllib.parse as _up
+    _r = _up.urlparse(_REDIS_URL)
+    REDIS_HOST     = _r.hostname or REDIS_HOST
+    REDIS_PORT     = _r.port    or REDIS_PORT
+    REDIS_PASSWORD = _r.password or REDIS_PASSWORD
 
 # Public base URL used to build image URLs. In production set to your domain.
 PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
