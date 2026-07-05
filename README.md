@@ -267,3 +267,5 @@ This embeds any products not yet in `artwork_embeddings`. Only embedded products
 | `AWS_SECRET_ACCESS_KEY` | No | S3/R2 secret key |
 | `AWS_ENDPOINT_URL` | No | R2 endpoint URL (leave empty for AWS S3) |
 | `AWS_CLOUDFRONT_URL` | No | CDN URL for public image serving |
+
+Backend/deploy verified: auto-deploy pipeline live as of 2026-07-05.
