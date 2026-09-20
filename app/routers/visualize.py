@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 import uuid
 from sqlalchemy import text
@@ -7,8 +7,14 @@ from app.worker.queue import get_queue
 from app.worker.tasks import run_wall_visualization
 from app.config import MAX_GENERATIONS_PER_DAY
 from app.services.visualization_service import count_today
+from app.security import require_service_token
 
-router = APIRouter(prefix="/visualize", tags=["visualize"])
+# Service-token protected: only the backend may enqueue paid Gemini generations.
+router = APIRouter(
+    prefix="/visualize",
+    tags=["visualize"],
+    dependencies=[Depends(require_service_token)],
+)
 
 
 class VisualizeRequest(BaseModel):

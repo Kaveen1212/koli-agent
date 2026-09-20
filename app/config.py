@@ -11,6 +11,12 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 STORAGE_BUCKET: str = os.getenv("STORAGE_BUCKET", "")
 SECRET_KEY: str    = os.getenv("SECRET_KEY", "")
 
+# koli-ART backend. Catalogue data is read through its /v1/internal/* API
+# rather than by querying Prisma's tables directly — see backend_client.py.
+BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:4000/v1")
+INTERNAL_SERVICE_TOKEN: str = os.getenv("INTERNAL_SERVICE_TOKEN", "")
+BACKEND_TIMEOUT_SECONDS: float = float(os.getenv("BACKEND_TIMEOUT_SECONDS", "10"))
+
 AWS_ACCESS_KEY_ID:     str = os.getenv("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 AWS_REGION:            str = os.getenv("AWS_REGION", "auto")

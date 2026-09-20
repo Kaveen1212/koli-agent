@@ -1,7 +1,13 @@
 from langchain_core.tools import tool
+
 from app.services.search_service import search_artworks, get_product_by_id
-from app.database import SessionLocal
-from sqlalchemy import text
+from app.services.backend_client import lookup_products, to_card, BackendUnavailable
+
+# Catalogue facts come from the backend API (see backend_client). Nothing here
+# touches the marketplace database directly any more — the agent only owns its
+# own tables.
+
+_UNAVAILABLE = "The catalogue is temporarily unavailable. Tell the customer and ask them to try again shortly."
 
 
 @tool
@@ -10,18 +16,7 @@ def search_art(query: str, category: str = "", price_max: float = 0) -> list:
     Use when the customer describes what kind of art they want.
     Finds art by meaning — 'calm earthy tones' works, not just exact words.
     """
-    results = search_artworks(query, category=category, price_max=price_max)
-    return [
-        {
-            "id": r["id"],
-            "title": r["title"],
-            "price": str(r["price"]),
-            "medium": r.get("medium", ""),
-            "size": r.get("size", ""),
-            "image_url": r.get("images", [])[0] if r.get("images") else "",
-        }
-        for r in results
-    ]
+    return [to_card(r) for r in search_artworks(query, category=category, price_max=price_max)]
 
 
 @tool
@@ -30,32 +25,11 @@ def filter_by_category(category: str, limit: int = 10) -> list:
     'show me only prints', 'only home décor', 'only paintings', etc.
     Returns products without vector search — faster than search_art for category-only requests.
     """
-    db = SessionLocal()
     try:
-        rows = db.execute(text("""
-            SELECT id, title, price, medium, size, category, images
-            FROM "Product"
-            WHERE status = 'ONLINE'
-              AND "isDeleted" = false
-              AND stock > 0
-              AND category ILIKE :category
-            ORDER BY "createdAt" DESC
-            LIMIT :limit
-        """), {"category": f"%{category}%", "limit": limit})
-        return [
-            {
-                "id":        r["id"],
-                "title":     r["title"],
-                "price":     str(r["price"]),
-                "medium":    r.get("medium", ""),
-                "size":      r.get("size", ""),
-                "category":  r.get("category", ""),
-                "image_url": r.get("images", [])[0] if r.get("images") else "",
-            }
-            for r in rows.mappings().all()
-        ]
-    finally:
-        db.close()
+        rows = lookup_products(category=category, limit=limit)
+    except BackendUnavailable:
+        return [{"error": _UNAVAILABLE}]
+    return [to_card(r) for r in rows]
 
 
 @tool
@@ -64,27 +38,13 @@ def find_artwork_by_title(title: str) -> dict:
     they saw earlier and you need its ID to call visualize_on_wall.
     Does a direct title match, no vector search needed.
     """
-    db = SessionLocal()
     try:
-        row = db.execute(text("""
-            SELECT id, title, price, medium, size, category, images
-            FROM "Product"
-            WHERE title ILIKE :title
-              AND "isDeleted" = false
-            LIMIT 1
-        """), {"title": f"%{title}%"}).mappings().first()
-        if not row:
-            return {"error": f"No artwork found with title containing '{title}'"}
-        return {
-            "id":        row["id"],
-            "title":     row["title"],
-            "price":     str(row["price"]),
-            "medium":    row.get("medium", ""),
-            "size":      row.get("size", ""),
-            "image_url": row.get("images", [])[0] if row.get("images") else "",
-        }
-    finally:
-        db.close()
+        rows = lookup_products(title=title, limit=1)
+    except BackendUnavailable:
+        return {"error": _UNAVAILABLE}
+    if not rows:
+        return {"error": f"No artwork found with title containing '{title}'"}
+    return to_card(rows[0])
 
 
 @tool
@@ -94,13 +54,13 @@ def get_item_details(artwork_id: str) -> dict:
     """
     row = get_product_by_id(artwork_id)
     if not row:
-        return {"error": f"Artwork {artwork_id} not found."}
+        return {"error": f"Artwork {artwork_id} not found or no longer available."}
     return {
-        "id": row["id"],
-        "title": row["title"],
-        "description": row.get("description", ""),
-        "price": str(row["price"]),
-        "medium": row.get("medium", ""),
-        "size": row.get("size", ""),
-        "images": row.get("images", []),
+        "id": row.get("id", ""),
+        "title": row.get("title", ""),
+        "description": row.get("description") or "",
+        "price": str(row.get("price", "")),
+        "medium": row.get("medium") or "",
+        "size": row.get("size") or "",
+        "images": row.get("images") or [],
     }
