@@ -24,8 +24,16 @@ def include_object(object, name, type_, reflected, compare_to):
 config = context.config
 
 # The DB URL is supplied by the environment, not alembic.ini, so credentials
-# stay out of source control. '%' is doubled because alembic passes the value
-# through ConfigParser interpolation.
+# stay out of source control.
+#
+# Required rather than optional: `sqlalchemy.url` in alembic.ini is empty, so
+# there is nothing to fall back to. Treating the variable as optional means a
+# missing one surfaces as an obscure SQLAlchemy parse error further down instead
+# of saying which setting is absent.
+#
+# '%' is doubled because alembic passes this value through ConfigParser
+# interpolation — a password containing one (a URL-encoded '%40', say) otherwise
+# blows up with InterpolationSyntaxError.
 _database_url = os.getenv("DATABASE_URL")
 if not _database_url:
     raise RuntimeError(
