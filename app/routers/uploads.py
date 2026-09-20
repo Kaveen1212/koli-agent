@@ -1,11 +1,17 @@
 import os
 import uuid
-from fastapi import APIRouter, File, UploadFile, HTTPException, Form
+from fastapi import APIRouter, File, UploadFile, HTTPException, Form, Depends
 from sqlalchemy import text
 from app.services.storage_service import save_image
 from app.database import SessionLocal
+from app.security import require_service_token
 
-router = APIRouter(prefix="/images", tags=["Images"])
+# Service-token protected: only the backend may reach these paid/Gemini paths.
+router = APIRouter(
+    prefix="/images",
+    tags=["Images"],
+    dependencies=[Depends(require_service_token)],
+)
 
 
 @router.post("/upload")

@@ -1,10 +1,14 @@
 import os
 from logging.config import fileConfig
 
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
 from alembic import context
+
+# Load .env so DATABASE_URL is available here just as it is for the app.
+load_dotenv()
 from app.database import Base
 from app.models import room_upload, artwork_embedding, chat_session, generation
 
@@ -19,11 +23,23 @@ def include_object(object, name, type_, reflected, compare_to):
 # access to the values within the .ini file in use.
 config = context.config
 
-# Prefer the runtime DATABASE_URL (containers/production) over the
-# localhost default baked into alembic.ini.
-_db_url = os.getenv("DATABASE_URL")
-if _db_url:
-    config.set_main_option("sqlalchemy.url", _db_url)
+# The DB URL is supplied by the environment, not alembic.ini, so credentials
+# stay out of source control.
+#
+# Required rather than optional: `sqlalchemy.url` in alembic.ini is empty, so
+# there is nothing to fall back to. Treating the variable as optional means a
+# missing one surfaces as an obscure SQLAlchemy parse error further down instead
+# of saying which setting is absent.
+#
+# '%' is doubled because alembic passes this value through ConfigParser
+# interpolation — a password containing one (a URL-encoded '%40', say) otherwise
+# blows up with InterpolationSyntaxError.
+_database_url = os.getenv("DATABASE_URL")
+if not _database_url:
+    raise RuntimeError(
+        "DATABASE_URL is not set — export it (or add it to .env) before running migrations."
+    )
+config.set_main_option("sqlalchemy.url", _database_url.replace("%", "%%"))
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
