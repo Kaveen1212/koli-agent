@@ -50,6 +50,10 @@ CORS_ORIGINS: list[str] = [
 # Per-user daily cap on image generations (runaway-cost guard).
 MAX_GENERATIONS_PER_DAY: int = int(os.getenv("MAX_GENERATIONS_PER_DAY", "20"))
 
+# Cap across ALL users per day. The per-user cap can be sidestepped by opening
+# more accounts; this one bounds the total spend.
+MAX_GLOBAL_GENERATIONS_PER_DAY: int = int(os.getenv("MAX_GLOBAL_GENERATIONS_PER_DAY", "200"))
+
 # How many past conversation turns to keep in history sent to the model.
 MAX_HISTORY_TURNS: int = int(os.getenv("MAX_HISTORY_TURNS", "20"))
 
@@ -59,6 +63,12 @@ COST_PER_GENERATION: float = float(os.getenv("COST_PER_GENERATION", "0.039"))
 # Embedding model + dimension — must match the artwork_embeddings vector size.
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2")
 EMBEDDING_DIM:   int = int(os.getenv("EMBEDDING_DIM", "3072"))
+
+# Background catalogue indexing (services/indexer.py): how often new or edited
+# products are embedded for search, and the most embeddings one pass may create
+# so a bulk import can't spike Gemini spend. 0 turns the indexer off.
+INDEX_INTERVAL_SECONDS: int = int(os.getenv("INDEX_INTERVAL_SECONDS", "600"))
+INDEX_MAX_PER_RUN:      int = int(os.getenv("INDEX_MAX_PER_RUN", "100"))
 
 # Image generation / vision model names.
 IMAGE_MODEL:  str = os.getenv("IMAGE_MODEL", "gemini-3.1-flash-image")

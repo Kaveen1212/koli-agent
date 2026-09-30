@@ -84,6 +84,30 @@ def lookup_products(
     return _get("/internal/products/lookup", params) or []
 
 
+def catalogue_page(after: str | None = None, limit: int = 100) -> list[dict]:
+    """One page of the sellable catalogue, ordered by id, for the search indexer.
+
+    Pass the last id of a page as `after` to fetch the next; an empty or short
+    page means the end.
+    """
+    params: dict[str, Any] = {"limit": limit}
+    if after:
+        params["after"] = after
+    return _get("/internal/products/catalogue", params) or []
+
+
+def absolute_media_url(path: str) -> str:
+    """The backend stores uploads as "/uploads/..."; resolve against its origin.
+
+    Uses the internal BACKEND_URL (e.g. http://backend:3000), so image fetches
+    stay on the private network instead of going out through Cloudflare.
+    """
+    if path.startswith(("http://", "https://")):
+        return path
+    origin = BACKEND_URL.rstrip("/").removesuffix("/v1")
+    return f"{origin}/{path.lstrip('/')}"
+
+
 def to_card(row: dict) -> dict:
     """Shape a backend product into the compact form the LLM tools return."""
     images = row.get("images") or []

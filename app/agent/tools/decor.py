@@ -1,16 +1,22 @@
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
+from app.agent.tools._identity import SIGN_IN_REQUIRED, signed_in_user_id
 from app.services.search_service import get_product_by_id
 from app.services.visualization_service import visualize_now, RateLimitExceeded
 
 
 @tool
-def stage_decor(user_id: str, surface_image_url: str, decor_item_id: str,
+def stage_decor(surface_image_url: str, decor_item_id: str, config: RunnableConfig,
                 placement: str = "on the surface visible in the image") -> dict:
     """Place a real catalog décor item onto a customer's table or shelf photo.
     Only call this after the customer has chosen a specific décor item.
     Use for tables, shelves, mantels — not walls (use visualize_on_wall for walls).
     Returns a preview_url the frontend can display in an <img> tag.
     """
+    user_id = signed_in_user_id(config)
+    if not user_id:
+        return dict(SIGN_IN_REQUIRED)
+
     row = get_product_by_id(decor_item_id)
     if not row:
         return {"error": f"Décor item {decor_item_id} not found."}

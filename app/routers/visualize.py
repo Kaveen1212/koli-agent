@@ -5,8 +5,7 @@ from sqlalchemy import text
 from app.database import SessionLocal
 from app.worker.queue import get_queue
 from app.worker.tasks import run_wall_visualization
-from app.config import MAX_GENERATIONS_PER_DAY
-from app.services.visualization_service import count_today
+from app.services.visualization_service import check_daily_limits, RateLimitExceeded
 from app.security import require_service_token
 
 # Service-token protected: only the backend may enqueue paid Gemini generations.
@@ -30,10 +29,14 @@ async def visualize_on_wall(request: VisualizeRequest):
     """Enqueue a wall visualization job. Returns immediately with a generation_id.
     Poll GET /visualize/status/{generation_id} to check when it's done.
     """
+    # Anonymous ids are minted fresh by the browser, so they can't carry a limit.
+    if request.user_id.startswith("anon:"):
+        raise HTTPException(status_code=403, detail="Sign in to create visualizations.")
     # Daily rate-limit guard (runaway-cost protection).
-    if MAX_GENERATIONS_PER_DAY and count_today(request.user_id) >= MAX_GENERATIONS_PER_DAY:
-        raise HTTPException(status_code=429,
-                            detail=f"Daily visualization limit of {MAX_GENERATIONS_PER_DAY} reached.")
+    try:
+        check_daily_limits(request.user_id)
+    except RateLimitExceeded as e:
+        raise HTTPException(status_code=429, detail=str(e))
 
     generation_id = str(uuid.uuid4())
 

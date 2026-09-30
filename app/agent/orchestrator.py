@@ -2,9 +2,10 @@ import os
 import json
 import uuid
 import base64
+import logging
 import httpx
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.messages import messages_from_dict, messages_to_dict
 from langgraph.graph import StateGraph, MessagesState, END
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -15,6 +16,8 @@ from app.database import SessionLocal
 from sqlalchemy import text
 
 os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
+
+logger = logging.getLogger(__name__)
 
 model = ChatGoogleGenerativeAI(
     model=AGENT_MODEL,
@@ -132,16 +135,52 @@ def _save_history(user_id: str, history: list) -> None:
         db.close()
 
 
+_NUDGE = HumanMessage(content=(
+    "(System note: your last turn produced no text for the customer. Reply to them now "
+    "in plain text, using the conversation and tool results above. If nothing was found, "
+    "say so honestly and ask one short question about what they are looking for.)"
+))
+
+_FALLBACK_REPLY = (
+    "I couldn't find anything matching that just yet — our collection is still growing. "
+    "Could you tell me a bit more about what you're looking for, like the style, colours, "
+    "size or budget?"
+)
+
+
+def _text_of(msg) -> str:
+    content = getattr(msg, "content", "")
+    if isinstance(content, list):
+        content = " ".join(
+            p.get("text", "") for p in content if isinstance(p, dict) and p.get("text"))
+    return (content or "").strip()
+
+
+def _recover_reply(messages: list) -> str:
+    """Gemini sometimes ends a turn with no text at all — typically right after a
+    tool came back empty — and the backend turns an empty reply into an error
+    for the customer. Ask once more with tool calls disabled, then fall back to
+    a fixed answer rather than return nothing.
+    """
+    logger.warning("Model returned an empty reply; asking again without tools")
+    convo = [m for m in messages
+             if not (isinstance(m, AIMessage) and not m.tool_calls and not _text_of(m))]
+    try:
+        text_only = model.bind_tools(TOOLS, tool_choice="none")
+        response = text_only.invoke(_prepare_for_gemini(
+            [SystemMessage(content=SYSTEM_PROMPT)] + convo + [_NUDGE]))
+        return _text_of(response) or _FALLBACK_REPLY
+    except Exception:
+        logger.exception("Empty-reply recovery failed; using the fixed reply")
+        return _FALLBACK_REPLY
+
+
 def process_message(user_id: str, message: str, image_url: str = None) -> str:
     history = _load_history(user_id)
 
-    # Always tell the agent the current user_id so it can pass it to tools
-    # (visualize_on_wall / stage_decor require it).
-    context_note = f"[current user_id: {user_id}]"
-
     if image_url and image_url.startswith(("http://", "https://")):
         text_with_url = (
-            f"{message}\n\n{context_note}\n"
+            f"{message}\n\n"
             f"[The customer's uploaded room photo URL is: {image_url} — "
             f"use this exact URL when calling analyze_room, visualize_on_wall, or stage_decor.]"
         )
@@ -150,17 +189,19 @@ def process_message(user_id: str, message: str, image_url: str = None) -> str:
             {"type": "image_url", "image_url": {"url": image_url}},
         ])
     else:
-        user_msg = HumanMessage(content=f"{message}\n\n{context_note}")
+        user_msg = HumanMessage(content=message)
 
     history.append(user_msg)
 
-    result = graph.invoke({"messages": history})
+    # Tools read the caller's identity from the config (see tools/_identity.py),
+    # not from their own arguments, which the model — and so the visitor — picks.
+    result = graph.invoke({"messages": history},
+                          config={"configurable": {"user_id": user_id}})
     last_msg = result["messages"][-1]
-    content = last_msg.content
-    if isinstance(content, list):
-        reply = " ".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("text"))
-    else:
-        reply = content
+    reply = _text_of(last_msg)
+    if not reply:
+        reply = _recover_reply(result["messages"])
+        last_msg = AIMessage(content=reply)
     history.append(last_msg)
 
     _save_history(user_id, history)

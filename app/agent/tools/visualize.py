@@ -1,15 +1,21 @@
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
+from app.agent.tools._identity import SIGN_IN_REQUIRED, signed_in_user_id
 from app.services.search_service import get_product_by_id
 from app.services.visualization_service import visualize_now, RateLimitExceeded
 
 
 @tool
-def visualize_on_wall(user_id: str, room_image_url: str, artwork_id: str,
+def visualize_on_wall(room_image_url: str, artwork_id: str, config: RunnableConfig,
                       placement: str = "centered on the main wall") -> dict:
     """Place a real catalog artwork onto a customer's wall photo using Gemini.
     Only call this after the customer has chosen a specific artwork.
     Returns a preview_url the frontend can display in an <img> tag.
     """
+    user_id = signed_in_user_id(config)
+    if not user_id:
+        return dict(SIGN_IN_REQUIRED)
+
     row = get_product_by_id(artwork_id)
     if not row:
         return {"error": f"Artwork {artwork_id} not found."}

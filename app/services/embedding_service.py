@@ -42,11 +42,16 @@ def embed_artwork_image(image_url: str) -> list[float]:
     Uses the SAME model as text embeddings so both live in one vector space
     (gemini-embedding-2 is multimodal). Required for search-by-room-photo.
     """
-    image_bytes = httpx.get(image_url, timeout=30, follow_redirects=True).content
+    res = httpx.get(image_url, timeout=30, follow_redirects=True)
+    # Without these checks a 404 page was embedded as if it were a JPEG.
+    res.raise_for_status()
+    mime_type = res.headers.get("content-type", "").split(";")[0].strip()
+    if not mime_type.startswith("image/"):
+        raise ValueError(f"{image_url} is not an image ({mime_type or 'no content-type'})")
     result = with_retry(
         client.models.embed_content,
         model=EMBEDDING_MODEL,
-        contents=[types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")],
+        contents=[types.Part.from_bytes(data=res.content, mime_type=mime_type)],
         config=_DIM_CONFIG,
     )
     return result.embeddings[0].values

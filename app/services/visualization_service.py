@@ -8,7 +8,9 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy import text
 from app.database import SessionLocal
-from app.config import MAX_GENERATIONS_PER_DAY, COST_PER_GENERATION
+from app.config import (
+    MAX_GENERATIONS_PER_DAY, MAX_GLOBAL_GENERATIONS_PER_DAY, COST_PER_GENERATION,
+)
 from app.services.image_service import generate_wall_visualization
 from app.services.watermark import apply_watermark
 from app.services.storage_service import save_image
@@ -18,17 +20,30 @@ class RateLimitExceeded(Exception):
     pass
 
 
-def count_today(user_id: str) -> int:
+def count_today(user_id: str | None = None) -> int:
+    """Generations since midnight UTC — for one user, or for everyone when None."""
+    params = {"start": datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0)}
+    sql = "SELECT COUNT(*) AS n FROM generations WHERE created_at >= :start"
+    if user_id is not None:
+        sql += " AND user_id = :uid"
+        params["uid"] = user_id
     db = SessionLocal()
     try:
-        row = db.execute(text("""
-            SELECT COUNT(*) AS n FROM generations
-            WHERE user_id = :uid AND created_at >= :start
-        """), {"uid": user_id, "start": datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0)}).mappings().first()
+        row = db.execute(text(sql), params).mappings().first()
         return int(row["n"]) if row else 0
     finally:
         db.close()
+
+
+def check_daily_limits(user_id: str) -> None:
+    """Raise RateLimitExceeded if this user, or the whole site, is at today's cap."""
+    if MAX_GENERATIONS_PER_DAY and count_today(user_id) >= MAX_GENERATIONS_PER_DAY:
+        raise RateLimitExceeded(
+            f"Daily visualization limit of {MAX_GENERATIONS_PER_DAY} reached.")
+    if MAX_GLOBAL_GENERATIONS_PER_DAY and count_today() >= MAX_GLOBAL_GENERATIONS_PER_DAY:
+        raise RateLimitExceeded(
+            "Visualizations are unavailable for the rest of today. Please try again tomorrow.")
 
 
 def _render(room_url: str, artwork_url: str, placement: str) -> bytes:
@@ -45,12 +60,10 @@ def _render(room_url: str, artwork_url: str, placement: str) -> bytes:
 
 def visualize_now(user_id: str, room_url: str, artwork_url: str,
                   placement: str, gen_type: str = "wall") -> dict:
-    """Synchronous path (used by the agent tool). Enforces the daily limit,
+    """Synchronous path (used by the agent tool). Enforces the daily limits,
     renders, stores, records the generation, and returns the preview URL.
     """
-    if MAX_GENERATIONS_PER_DAY and count_today(user_id) >= MAX_GENERATIONS_PER_DAY:
-        raise RateLimitExceeded(
-            f"Daily visualization limit of {MAX_GENERATIONS_PER_DAY} reached.")
+    check_daily_limits(user_id)
 
     generation_id = str(uuid.uuid4())
     db = SessionLocal()
