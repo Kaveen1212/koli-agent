@@ -42,6 +42,11 @@ if _REDIS_URL:
 # Public base URL used to build image URLs. In production set to your domain.
 PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
 
+# Caps on every image the agent downloads (see services/net.py). The backend
+# accepts uploads up to 10 MB, so the default fits any image it can store.
+IMAGE_FETCH_MAX_BYTES:       int   = int(os.getenv("IMAGE_FETCH_MAX_BYTES", str(10 * 1024 * 1024)))
+IMAGE_FETCH_TIMEOUT_SECONDS: float = float(os.getenv("IMAGE_FETCH_TIMEOUT_SECONDS", "15"))
+
 # Comma-separated list of allowed CORS origins. "*" only for local dev.
 CORS_ORIGINS: list[str] = [
     o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()

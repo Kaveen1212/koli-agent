@@ -1,8 +1,8 @@
-import httpx
 from google import genai
 from google.genai import types
 from app.config import GEMINI_API_KEY, EMBEDDING_MODEL, EMBEDDING_DIM
 from app.services.gemini_retry import with_retry
+from app.services.net import fetch_image
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -42,16 +42,16 @@ def embed_artwork_image(image_url: str) -> list[float]:
     Uses the SAME model as text embeddings so both live in one vector space
     (gemini-embedding-2 is multimodal). Required for search-by-room-photo.
     """
-    res = httpx.get(image_url, timeout=30, follow_redirects=True)
-    # Without these checks a 404 page was embedded as if it were a JPEG.
-    res.raise_for_status()
-    mime_type = res.headers.get("content-type", "").split(";")[0].strip()
+    # fetch_image raises on an error status — without that check a 404 page was
+    # embedded as if it were a JPEG.
+    image = fetch_image(image_url)
+    mime_type = image.content_type
     if not mime_type.startswith("image/"):
         raise ValueError(f"{image_url} is not an image ({mime_type or 'no content-type'})")
     result = with_retry(
         client.models.embed_content,
         model=EMBEDDING_MODEL,
-        contents=[types.Part.from_bytes(data=res.content, mime_type=mime_type)],
+        contents=[types.Part.from_bytes(data=image.content, mime_type=mime_type)],
         config=_DIM_CONFIG,
     )
     return result.embeddings[0].values

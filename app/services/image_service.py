@@ -1,23 +1,17 @@
 import io
-import os
-import httpx
 from PIL import Image
 from google import genai
 from google.genai import types
 from app.config import GEMINI_API_KEY, IMAGE_MODEL, VISION_MODEL
 from app.services.gemini_retry import with_retry
+from app.services.net import fetch_image
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 def _fetch(url: str) -> bytes:
-    if "localhost" in url or "127.0.0.1" in url:
-        local_path = url.split("/static/")[1].split("?")[0]
-        with open(os.path.join("static", local_path), "rb") as f:
-            return f.read()
-    resp = httpx.get(url, timeout=30, follow_redirects=True)
-    resp.raise_for_status()
-    return resp.content
+    # The URL comes from a visitor or a tool argument: see net.fetch_image.
+    return fetch_image(url).content
 
 
 def _compress(image_bytes: bytes, max_size: int = 1024) -> bytes:
