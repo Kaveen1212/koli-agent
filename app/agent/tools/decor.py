@@ -1,6 +1,7 @@
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from app.agent.tools._identity import SIGN_IN_REQUIRED, signed_in_user_id
+from app.services.backend_client import absolute_media_url
 from app.services.search_service import get_product_by_id
 from app.services.visualization_service import visualize_now, RateLimitExceeded
 
@@ -30,7 +31,8 @@ def stage_decor(surface_image_url: str, decor_item_id: str, config: RunnableConf
         result = visualize_now(
             user_id=user_id,
             room_url=surface_image_url,
-            artwork_url=item_url,
+            # Catalogue images are stored as relative /uploads/... paths.
+            artwork_url=absolute_media_url(item_url),
             placement=f"Place the décor item {placement}",
             gen_type="decor",
         )
