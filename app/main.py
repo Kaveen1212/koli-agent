@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.config import CORS_ORIGINS
+from app.config import CORS_ORIGINS, ENABLE_API_DOCS
 from app.routers import agent, uploads, visualize
 from app.services.indexer import start_background_indexer
 
@@ -26,7 +26,15 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Artnuss Art Visualizer Agent", lifespan=lifespan)
+# The schema and Swagger UI are disabled by default so the agent's tool and
+# route surface is not browsable from the internet.
+app = FastAPI(
+    title="Artnuss Art Visualizer Agent",
+    lifespan=lifespan,
+    docs_url="/docs" if ENABLE_API_DOCS else None,
+    redoc_url="/redoc" if ENABLE_API_DOCS else None,
+    openapi_url="/openapi.json" if ENABLE_API_DOCS else None,
+)
 
 app.add_middleware(
     CORSMiddleware,
