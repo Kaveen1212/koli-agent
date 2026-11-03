@@ -11,8 +11,9 @@ from langgraph.graph import StateGraph, MessagesState, END
 from langgraph.prebuilt import ToolNode, tools_condition
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.tools import TOOLS
-from app.config import GEMINI_API_KEY, AGENT_MODEL, MAX_HISTORY_TURNS, PUBLIC_BASE_URL
+from app.config import GEMINI_API_KEY, AGENT_MODEL, MAX_HISTORY_TURNS
 from app.database import SessionLocal
+from app.services.net import UnsafeImageURL, fetch_image
 from sqlalchemy import text
 
 os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
@@ -28,11 +29,8 @@ model_with_tools = model.bind_tools(TOOLS)
 
 
 def _load_image_bytes(url: str) -> bytes:
-    if "localhost" in url or "127.0.0.1" in url or url.startswith(PUBLIC_BASE_URL):
-        local_path = url.split("/static/")[1].split("?")[0]
-        with open(os.path.join("static", local_path), "rb") as f:
-            return f.read()
-    return httpx.get(url, timeout=30, follow_redirects=True).content
+    # The URL arrives from an anonymous chat request: see net.fetch_image.
+    return fetch_image(url).content
 
 
 def _prepare_for_gemini(messages: list) -> list:
@@ -53,7 +51,13 @@ def _prepare_for_gemini(messages: list) -> list:
                 if is_img and i == last_human_idx:
                     url = part["image_url"]["url"]
                     if not url.startswith("data:"):
-                        b64 = base64.b64encode(_load_image_bytes(url)).decode()
+                        try:
+                            b64 = base64.b64encode(_load_image_bytes(url)).decode()
+                        except (UnsafeImageURL, httpx.HTTPError, OSError) as exc:
+                            logger.warning("Attached image not loaded: %s", exc)
+                            new_parts.append({"type": "text",
+                                              "text": "[the attached image could not be loaded]"})
+                            continue
                         url = f"data:image/jpeg;base64,{b64}"
                     new_parts.append({"type": "image_url", "image_url": {"url": url}})
                 elif is_img:
@@ -178,7 +182,8 @@ def _recover_reply(messages: list) -> str:
 def process_message(user_id: str, message: str, image_url: str = None) -> str:
     history = _load_history(user_id)
 
-    if image_url and image_url.startswith(("http://", "https://")):
+    # The backend sends its own uploads as "/uploads/..." paths.
+    if image_url and image_url.startswith(("http://", "https://", "/uploads/")):
         text_with_url = (
             f"{message}\n\n"
             f"[The customer's uploaded room photo URL is: {image_url} — "

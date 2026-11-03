@@ -13,6 +13,9 @@ SECRET_KEY: str    = os.getenv("SECRET_KEY", "")
 
 # koli-ART backend. Catalogue data is read through its /v1/internal/* API
 # rather than by querying Prisma's tables directly — see backend_client.py.
+# In production this MUST be the docker-network URL (http://backend:3000/v1),
+# never the public https://api.artnuss.com: the edge blocks /v1/internal/*
+# from the internet. The localhost default is for local development only.
 BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:4000/v1")
 INTERNAL_SERVICE_TOKEN: str = os.getenv("INTERNAL_SERVICE_TOKEN", "")
 BACKEND_TIMEOUT_SECONDS: float = float(os.getenv("BACKEND_TIMEOUT_SECONDS", "10"))
@@ -41,6 +44,11 @@ if _REDIS_URL:
 
 # Public base URL used to build image URLs. In production set to your domain.
 PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
+
+# Caps on every image the agent downloads (see services/net.py). The backend
+# accepts uploads up to 10 MB, so the default fits any image it can store.
+IMAGE_FETCH_MAX_BYTES:       int   = int(os.getenv("IMAGE_FETCH_MAX_BYTES", str(10 * 1024 * 1024)))
+IMAGE_FETCH_TIMEOUT_SECONDS: float = float(os.getenv("IMAGE_FETCH_TIMEOUT_SECONDS", "15"))
 
 # Comma-separated list of allowed CORS origins. "*" only for local dev.
 CORS_ORIGINS: list[str] = [
@@ -74,3 +82,7 @@ INDEX_MAX_PER_RUN:      int = int(os.getenv("INDEX_MAX_PER_RUN", "100"))
 IMAGE_MODEL:  str = os.getenv("IMAGE_MODEL", "gemini-3.1-flash-image")
 VISION_MODEL: str = os.getenv("VISION_MODEL", "gemini-2.5-flash")
 AGENT_MODEL:  str = os.getenv("AGENT_MODEL", "gemini-2.5-flash")
+
+# Interactive API docs (/docs, /redoc, /openapi.json) are off unless this is
+# explicitly enabled (local development only).
+ENABLE_API_DOCS: bool = os.getenv("ENABLE_API_DOCS", "false").strip().lower() in ("1", "true", "yes", "on")

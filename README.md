@@ -170,7 +170,7 @@ cd "Koli agent"
 uv run rq worker --url redis://:koli_redis_pass@localhost:6379
 ```
 
-API docs: http://127.0.0.1:8000/docs
+API docs (local dev only): set `ENABLE_API_DOCS=true`, then open http://127.0.0.1:8000/docs. They are disabled by default (and in production).
 
 ---
 
@@ -267,5 +267,7 @@ This embeds any products not yet in `artwork_embeddings`. Only embedded products
 | `AWS_SECRET_ACCESS_KEY` | No | S3/R2 secret key |
 | `AWS_ENDPOINT_URL` | No | R2 endpoint URL (leave empty for AWS S3) |
 | `AWS_CLOUDFRONT_URL` | No | CDN URL for public image serving |
+| `BACKEND_URL` | Yes | Backend API base URL. In production use the docker-network URL `http://backend:3000/v1`, never the public `https://api.artnuss.com` (the edge blocks `/v1/internal/*`). Default `http://localhost:4000/v1` is for local dev |
+| `ENABLE_API_DOCS` | No | `true` exposes `/docs`, `/redoc`, `/openapi.json` (local dev only; default off) |
 
 Backend/deploy verified: auto-deploy pipeline live as of 2026-07-05.
