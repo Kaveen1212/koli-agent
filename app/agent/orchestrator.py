@@ -1,13 +1,12 @@
 import os
 import json
-import uuid
 import base64
 import logging
 import httpx
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.messages import messages_from_dict, messages_to_dict
-from langgraph.graph import StateGraph, MessagesState, END
+from langgraph.graph import StateGraph, MessagesState
 from langgraph.prebuilt import ToolNode, tools_condition
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.tools import TOOLS

@@ -174,6 +174,12 @@ API docs (local dev only): set `ENABLE_API_DOCS=true`, then open http://127.0.0.
 
 ---
 
+## CI
+
+GitHub Actions runs lint, `alembic upgrade head` + `pytest` against pgvector, and a `docker build` on every PR. See [docs/CI.md](docs/CI.md), including how to make it a required check on `main`.
+
+---
+
 ## API Endpoints
 
 ### `POST /agent/message`

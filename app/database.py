@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, text, event
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from pgvector.psycopg2 import register_vector
 from app.config import DATABASE_URL

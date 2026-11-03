@@ -1,4 +1,3 @@
-import os
 import uuid
 from fastapi import APIRouter, File, UploadFile, HTTPException, Form, Depends
 from sqlalchemy import text
