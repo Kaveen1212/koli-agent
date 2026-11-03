@@ -69,6 +69,18 @@ jobs:
         run: |
           test "$(python -m alembic heads | grep -c '(head)')" = "1"
           python -m alembic current | grep '(head)'
+      - name: Check the agent's tables are in the agent schema, none in public
+        run: |
+          python - <<'PY'
+          import os, psycopg2
+          cur = psycopg2.connect(os.environ["DATABASE_URL"]).cursor()
+          cur.execute("SELECT schemaname, tablename FROM pg_tables WHERE tablename IN "
+                      "('artwork_embeddings','chat_sessions','generations','room_uploads','alembic_version')")
+          found = sorted(cur.fetchall())
+          print(found)
+          assert found == [("agent", t) for t in sorted(
+              ["alembic_version", "artwork_embeddings", "chat_sessions", "generations", "room_uploads"])], found
+          PY
       - name: pytest
         run: python -m pytest -q -p no:cacheprovider
 

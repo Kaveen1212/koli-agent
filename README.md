@@ -146,6 +146,8 @@ docker exec -it koli-postgres psql -U koli_user -d koli_art -c "CREATE EXTENSION
 uv run python -m alembic upgrade head
 ```
 
+The agent's tables (`artwork_embeddings`, `chat_sessions`, `generations`, `room_uploads`) and its `alembic_version` live in the **`agent` schema**, not `public` (which belongs to the backend's Prisma). The app and Alembic both put `agent,public` on the `search_path`. Never run a pre-`a01c5e7d9b21` image against a migrated database; for an emergency rollback use `alembic downgrade -1` or `scripts/revert_agent_schema.sql`.
+
 **6. Seed test data and generate embeddings:**
 ```bash
 uv run python scripts/seed_products.py
