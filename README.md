@@ -172,6 +172,8 @@ cd "Koli agent"
 uv run rq worker --url redis://:koli_redis_pass@localhost:6379
 ```
 
+Observability: every chat turn logs one JSON line on the `koli.turn` logger (`requestId`, hashed `user` key, `latencyMs`, `toolCalls`, `tokens`, `status`; never raw ids or message text). The agent reads `X-Request-ID` if the caller sends it and echoes it back. `/metrics` exposes `koli_agent_turns_total`, `koli_agent_turn_latency_p95_seconds`, `koli_agent_gemini_errors_total`, `koli_agent_index_lag_seconds` and `koli_agent_quota_rejections_total` (plus a latency histogram, tool calls, tokens, index state).
+
 API docs (local dev only): set `ENABLE_API_DOCS=true`, then open http://127.0.0.1:8000/docs. They are disabled by default (and in production).
 
 ---
@@ -277,5 +279,7 @@ This embeds any products not yet in `artwork_embeddings`. Only embedded products
 | `AWS_CLOUDFRONT_URL` | No | CDN URL for public image serving |
 | `BACKEND_URL` | Yes | Backend API base URL. In production use the docker-network URL `http://backend:3000/v1`, never the public `https://api.artnuss.com` (the edge blocks `/v1/internal/*`). Default `http://localhost:4000/v1` is for local dev |
 | `ENABLE_API_DOCS` | No | `true` exposes `/docs`, `/redoc`, `/openapi.json` (local dev only; default off) |
+| `METRICS_TOKEN` | No | Enables `GET /metrics` (Prometheus), scraped with `Authorization: Bearer <token>`. Unset = the route returns 404. Keep it off public routes |
+| `LOG_HASH_SALT` | No | Optional salt for the hashed user key in the per-turn log line |
 
 Backend/deploy verified: auto-deploy pipeline live as of 2026-07-05.

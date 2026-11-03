@@ -86,3 +86,9 @@ AGENT_MODEL:  str = os.getenv("AGENT_MODEL", "gemini-2.5-flash")
 # Interactive API docs (/docs, /redoc, /openapi.json) are off unless this is
 # explicitly enabled (local development only).
 ENABLE_API_DOCS: bool = os.getenv("ENABLE_API_DOCS", "false").strip().lower() in ("1", "true", "yes", "on")
+
+# Observability (app/observability.py). /metrics returns 404 unless METRICS_TOKEN
+# is set, and then requires "Authorization: Bearer <token>".
+METRICS_TOKEN: str = os.getenv("METRICS_TOKEN", "")
+# Optional salt for the hashed user key in the per-turn log line.
+LOG_HASH_SALT: str = os.getenv("LOG_HASH_SALT", "")

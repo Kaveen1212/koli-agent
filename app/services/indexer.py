@@ -14,6 +14,7 @@ from sqlalchemy import text
 
 from app.config import INDEX_INTERVAL_SECONDS, INDEX_MAX_PER_RUN
 from app.database import engine
+from app.observability import record_index_run
 from app.services.backend_client import catalogue_page, absolute_media_url, BackendUnavailable
 from app.services.embedding_service import embed_artwork_text, embed_artwork_image
 
@@ -64,7 +65,7 @@ def index_catalog(max_embeds: int = INDEX_MAX_PER_RUN) -> dict:
     One bad product is logged and counted, never fatal. Raises
     BackendUnavailable if the catalogue can't be fetched at all.
     """
-    stats = {"checked": 0, "embedded": 0, "failed": 0}
+    stats = {"checked": 0, "embedded": 0, "failed": 0, "needs": 0}
     with engine.connect() as conn:
         if not conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": _LOCK_KEY}).scalar():
             return {**stats, "skipped": "another indexer holds the lock"}
@@ -80,6 +81,7 @@ def index_catalog(max_embeds: int = INDEX_MAX_PER_RUN) -> dict:
                     stats["checked"] += 1
                     if not _needs_embedding(product, known):
                         continue
+                    stats["needs"] += 1
                     if stats["embedded"] >= max_embeds:
                         break
                     try:
@@ -121,12 +123,15 @@ def _run_forever() -> None:
     while True:
         try:
             stats = index_catalog()
+            record_index_run(stats, failed=False)
             if first_run or stats["embedded"] or stats["failed"]:
                 logger.info("Catalogue index: checked %d, embedded %d, failed %d",
                             stats["checked"], stats["embedded"], stats["failed"])
         except BackendUnavailable as exc:
+            record_index_run(None, failed=True)
             logger.warning("Catalogue index skipped, backend unavailable: %s", exc)
         except Exception:
+            record_index_run(None, failed=True)
             logger.exception("Catalogue indexing failed")
         first_run = False
         time.sleep(INDEX_INTERVAL_SECONDS)

@@ -174,7 +174,7 @@ class _FakeModel:
     def bind_tools(self, *a, **k):
         return self
 
-    def invoke(self, _messages):
+    def invoke(self, _messages, config=None):
         if self.error:
             raise self.error
         return AIMessage(content=self.reply)
