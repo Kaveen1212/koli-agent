@@ -278,6 +278,7 @@ This embeds any products not yet in `artwork_embeddings`. Only embedded products
 | `AWS_ENDPOINT_URL` | No | R2 endpoint URL (leave empty for AWS S3) |
 | `AWS_CLOUDFRONT_URL` | No | CDN URL for public image serving |
 | `BACKEND_URL` | Yes | Backend API base URL. In production use the docker-network URL `http://backend:3000/v1`, never the public `https://api.artnuss.com` (the edge blocks `/v1/internal/*`). Default `http://localhost:4000/v1` is for local dev |
+| `MEDIA_PUBLIC_BASE_URL` | No | Public media host, https only (e.g. `https://media.artnuss.com`). When set, old `/uploads/<key>` references (visualise/decor tools, chat images, indexer image embeddings) are fetched from `<MEDIA_PUBLIC_BASE_URL>/<key>` instead of the backend, because after the R2 switch the backend only 301-redirects them and the agent never follows redirects. Must be set in the agent env in the same step as the backend's `STORAGE_DRIVER=s3` switch. Absolute media URLs are used as given. An invalid value is ignored with a warning. Unset (default) = fetch from `BACKEND_URL` |
 | `ENABLE_API_DOCS` | No | `true` exposes `/docs`, `/redoc`, `/openapi.json` (local dev only; default off) |
 | `METRICS_TOKEN` | No | Enables `GET /metrics` (Prometheus), scraped with `Authorization: Bearer <token>`. Unset = the route returns 404. Keep it off public routes |
 | `LOG_HASH_SALT` | No | Optional salt for the hashed user key in the per-turn log line |

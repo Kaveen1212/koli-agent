@@ -18,6 +18,7 @@ from typing import Any
 import httpx
 
 from app.config import BACKEND_URL, INTERNAL_SERVICE_TOKEN, BACKEND_TIMEOUT_SECONDS
+from app.services.net import media_public_url
 
 logger = logging.getLogger(__name__)
 
@@ -100,10 +101,17 @@ def absolute_media_url(path: str) -> str:
     """The backend stores uploads as "/uploads/..."; resolve against its origin.
 
     Uses the internal BACKEND_URL (e.g. http://backend:3000), so image fetches
-    stay on the private network instead of going out through Cloudflare.
+    stay on the private network instead of going out through Cloudflare. When
+    MEDIA_PUBLIC_BASE_URL is set (storage moved to R2) the backend only redirects
+    "/uploads/<key>" there, and the agent never follows redirects, so the path is
+    mapped straight to "<MEDIA_PUBLIC_BASE_URL>/<key>". Absolute URLs (rows
+    written after the move) pass through unchanged.
     """
     if path.startswith(("http://", "https://")):
         return path
+    public = media_public_url("/" + path.lstrip("/"))
+    if public is not None:
+        return public
     origin = BACKEND_URL.rstrip("/").removesuffix("/v1")
     return f"{origin}/{path.lstrip('/')}"
 

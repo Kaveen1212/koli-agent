@@ -202,3 +202,120 @@ def test_body_and_content_type_are_returned(transport):
         200, content=b"\xff\xd8", headers={"content-type": "image/jpeg; charset=binary"})
     image = net._download("https://93.184.216.34/r.jpg", headers={"Host": "cdn.example.com"})
     assert image == net.FetchedImage(b"\xff\xd8", "image/jpeg")
+
+
+# ── MEDIA_PUBLIC_BASE_URL (storage on R2) ────────────────────────────────────
+
+MEDIA = "https://media.artnuss.com"
+
+
+@pytest.fixture
+def r2(monkeypatch, dns):
+    """Media host configured, resolving to a public address."""
+    monkeypatch.setattr(net, "BACKEND_URL", "http://backend:3000/v1")
+    monkeypatch.setattr(net, "MEDIA_PUBLIC_BASE_URL", MEDIA)
+    monkeypatch.setattr("app.services.backend_client.BACKEND_URL", "http://backend:3000/v1")
+    dns.table["media.artnuss.com"] = ["104.18.2.3"]
+    return dns
+
+
+def test_upload_path_maps_to_the_media_host_with_the_backends_key(r2, downloads):
+    # /uploads/<key> -> <base>/<key>; the key itself is "uploads/<hex>.webp".
+    fetch_image("/uploads/uploads/abc.webp")
+    assert downloads[0]["url"] == "https://104.18.2.3:443/uploads/abc.webp"
+    assert downloads[0]["headers"] == {"Host": "media.artnuss.com"}
+    assert downloads[0]["extensions"] == {"sni_hostname": "media.artnuss.com"}
+
+
+def test_backend_origin_upload_url_also_maps_to_the_media_host(r2, downloads):
+    fetch_image("http://backend:3000/uploads/uploads/abc.webp")
+    assert downloads[0]["url"] == "https://104.18.2.3:443/uploads/abc.webp"
+
+
+def test_absolute_media_host_url_is_fetched_as_a_public_url(r2, downloads):
+    fetch_image(f"{MEDIA}/uploads/abc.webp")
+    assert downloads[0]["url"] == "https://104.18.2.3:443/uploads/abc.webp"
+
+
+def test_media_host_keeps_the_public_dns_check(r2, downloads):
+    r2.table["media.artnuss.com"] = ["104.18.2.3", "10.0.0.5"]
+    with pytest.raises(UnsafeImageURL):
+        fetch_image("/uploads/uploads/abc.webp")
+    assert downloads == []
+
+
+@pytest.mark.parametrize("path", [
+    "/uploads/../v1/admin", "/uploads/a/%2e%2e/b", "/uploads/", "/uploads/a?x=1",
+    "/uploads/.incoming/abc.webp", "/uploads/uploads/.hidden/abc.webp",
+])
+def test_unclean_paths_are_still_refused_with_a_media_host(r2, downloads, path):
+    with pytest.raises(UnsafeImageURL):
+        fetch_image(path)
+    assert downloads == []
+
+
+def test_redirects_are_still_not_followed_on_the_media_host(r2, monkeypatch):
+    class Resp:
+        is_redirect = True
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class Client:
+        def __init__(self, **kw):
+            assert kw["follow_redirects"] is False
+            assert kw["trust_env"] is False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def stream(self, *a, **k):
+            return Resp()
+
+    monkeypatch.setattr(net.httpx, "Client", Client)
+    with pytest.raises(UnsafeImageURL, match="redirect"):
+        fetch_image("/uploads/uploads/abc.webp")
+
+
+def test_absolute_media_url_maps_uploads_and_passes_absolute_through(r2):
+    from app.services.backend_client import absolute_media_url
+    assert absolute_media_url("/uploads/uploads/a.webp") == f"{MEDIA}/uploads/a.webp"
+    assert absolute_media_url(f"{MEDIA}/uploads/new.webp") == f"{MEDIA}/uploads/new.webp"
+    assert absolute_media_url("https://cdn.example/a.webp") == "https://cdn.example/a.webp"
+
+
+def test_absolute_media_url_without_a_media_host_is_unchanged(monkeypatch):
+    from app.services.backend_client import absolute_media_url
+    monkeypatch.setattr(net, "MEDIA_PUBLIC_BASE_URL", "")
+    monkeypatch.setattr("app.services.backend_client.BACKEND_URL", "http://backend:3000/v1")
+    assert absolute_media_url("/uploads/uploads/a.webp") == "http://backend:3000/uploads/uploads/a.webp"
+    assert absolute_media_url(f"{MEDIA}/uploads/a.webp") == f"{MEDIA}/uploads/a.webp"
+
+
+def test_media_host_config_accepts_https_only(caplog):
+    from app.config import parse_media_public_base_url as parse
+    assert parse("") == "" and parse("   ") == ""
+    assert parse(" https://media.artnuss.com/ ") == MEDIA
+    assert parse("https://media.artnuss.com/base/") == "https://media.artnuss.com/base"
+    with caplog.at_level("WARNING"):
+        for bad in ("http://media.artnuss.com", "media.artnuss.com", "ftp://x/y",
+                    "https://", "https://u:p@media.artnuss.com", "https://m.example/?q=1",
+                    "https://m.example:abc"):
+            assert parse(bad) == "", bad
+    assert caplog.text.count("MEDIA_PUBLIC_BASE_URL is not a valid https URL") == 7
+
+
+def test_chat_image_check_accepts_both_media_shapes():
+    """orchestrator._run_turn only treats http(s) and /uploads/ image URLs as
+    attachments; both the legacy and the R2 shape must pass."""
+    import inspect
+    from app.agent import orchestrator
+    src = inspect.getsource(orchestrator._run_turn)
+    assert 'startswith(("http://", "https://", "/uploads/"))' in src

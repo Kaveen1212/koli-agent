@@ -1,5 +1,7 @@
 from dotenv import load_dotenv
+import logging
 import os
+from urllib.parse import urlsplit
 
 
 load_dotenv()
@@ -19,6 +21,38 @@ SECRET_KEY: str    = os.getenv("SECRET_KEY", "")
 BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:4000/v1")
 INTERNAL_SERVICE_TOKEN: str = os.getenv("INTERNAL_SERVICE_TOKEN", "")
 BACKEND_TIMEOUT_SECONDS: float = float(os.getenv("BACKEND_TIMEOUT_SECONDS", "10"))
+
+
+
+def parse_media_public_base_url(raw: str) -> str:
+    """The media host's base URL without a trailing slash, or "" when unset or
+    unusable. Only an https URL with a host (no credentials, query or fragment)
+    is accepted; anything else is ignored with a warning rather than stopping
+    the agent, which then keeps fetching media from the backend."""
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+        parts.port  # noqa: B018 - raises ValueError on a non-numeric port
+        valid = (parts.scheme == "https" and bool(parts.hostname)
+                 and not (parts.username or parts.password or parts.query or parts.fragment))
+    except ValueError:
+        valid = False
+    if not valid:
+        logging.getLogger(__name__).warning(
+            "MEDIA_PUBLIC_BASE_URL is not a valid https URL; ignoring it "
+            "(media is fetched from BACKEND_URL)")
+        return ""
+    return raw.rstrip("/")
+
+
+# Public media host (Cloudflare R2 behind e.g. https://media.artnuss.com). Set it
+# in the SAME step as the backend's STORAGE_DRIVER=s3: the backend then answers
+# /uploads/<key> with a redirect, which the agent never follows, so old
+# "/uploads/<key>" references must be mapped to "<this>/<key>" directly.
+# Unset (default): "/uploads/..." is fetched from BACKEND_URL's origin.
+MEDIA_PUBLIC_BASE_URL: str = parse_media_public_base_url(os.getenv("MEDIA_PUBLIC_BASE_URL", ""))
 
 AWS_ACCESS_KEY_ID:     str = os.getenv("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")

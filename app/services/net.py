@@ -7,7 +7,11 @@ visualisations, the search indexer — goes through fetch_image(), which only
 ever does one of three things:
 
 * "/uploads/..." paths, and URLs on the backend's internal origin with an
-  /uploads/ path, are marketplace media: fetched from BACKEND_URL's origin.
+  /uploads/ path, are marketplace media: fetched from BACKEND_URL's origin, or,
+  when MEDIA_PUBLIC_BASE_URL is set (storage on R2), from that public media host
+  as "<MEDIA_PUBLIC_BASE_URL>/<key>" (the backend would only redirect there, and
+  redirects are never followed). That host is then fetched like any other public
+  URL: every DNS address checked, connection pinned.
 * URLs under PUBLIC_BASE_URL/static/ are the agent's own files: read from
   ./static, and only if the resolved path stays inside it.
 * Anything else must be http(s) to a host whose every DNS address is public.
@@ -32,6 +36,7 @@ from app.config import (
     BACKEND_URL,
     IMAGE_FETCH_MAX_BYTES,
     IMAGE_FETCH_TIMEOUT_SECONDS,
+    MEDIA_PUBLIC_BASE_URL,
     PUBLIC_BASE_URL,
 )
 
@@ -61,7 +66,7 @@ def fetch_image(url: str) -> FetchedImage:
     if url.startswith("/"):
         if not _is_media_path(url):
             raise UnsafeImageURL("only /uploads/ paths can be given without a host")
-        return _download(f"{_backend_origin()}{url}")
+        return _fetch_media(url)
 
     parts = urlsplit(url)
     if parts.scheme not in _DEFAULT_PORTS:
@@ -76,7 +81,7 @@ def fetch_image(url: str) -> FetchedImage:
         # The internal backend is trusted for its public media and nothing else.
         if not _is_media_path(parts.path) or parts.query or parts.fragment:
             raise UnsafeImageURL("only /uploads/ media may be fetched from the backend")
-        return _download(url)
+        return _fetch_media(parts.path)
     return _download_public(parts)
 
 
@@ -84,6 +89,29 @@ def fetch_image(url: str) -> FetchedImage:
 
 def _backend_origin() -> str:
     return BACKEND_URL.rstrip("/").removesuffix("/v1")
+
+
+def media_public_url(path: str) -> str | None:
+    """"/uploads/<key>" -> "<MEDIA_PUBLIC_BASE_URL>/<key>", the same mapping as the
+    backend's /uploads redirect (StorageService.publicUrl is "<base>/<key>" and
+    the local URL is "/uploads/<key>"). None when no media host is configured or
+    the path is not a clean, public media path."""
+    if not MEDIA_PUBLIC_BASE_URL or not _is_media_path(path):
+        return None
+    key = path[len("/uploads/"):]
+    if any(seg.startswith(".") for seg in key.split("/")):
+        return None  # hidden folders (.incoming) are private, never public media
+    return f"{MEDIA_PUBLIC_BASE_URL}/{key}"
+
+
+def _fetch_media(path: str) -> FetchedImage:
+    """Fetch marketplace media given its "/uploads/<key>" path."""
+    public = media_public_url(path)
+    if public is not None:
+        return _download_public(urlsplit(public))
+    if MEDIA_PUBLIC_BASE_URL:
+        raise UnsafeImageURL("not a public media path")
+    return _download(f"{_backend_origin()}{path}")
 
 
 def _origin_key(parts: SplitResult) -> tuple[str, str, int | None]:
