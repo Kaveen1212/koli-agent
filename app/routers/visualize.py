@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 import uuid
 from sqlalchemy import text
 from app.database import SessionLocal
@@ -17,11 +17,13 @@ router = APIRouter(
 
 
 class VisualizeRequest(BaseModel):
-    room_image_url:  str
-    artwork_image_url: str
-    artwork_id:      str
-    user_id:         str
-    placement:       str = "centered on the main wall"
+    model_config = ConfigDict(extra="forbid")
+
+    room_image_url:  str = Field(min_length=1, max_length=1000)
+    artwork_image_url: str = Field(min_length=1, max_length=1000)
+    artwork_id:      str = Field(min_length=1, max_length=64)
+    user_id:         str = Field(min_length=1, max_length=128)
+    placement:       str = Field(default="centered on the main wall", max_length=200)
 
 
 @router.post("/wall")
