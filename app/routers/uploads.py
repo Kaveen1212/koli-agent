@@ -13,14 +13,28 @@ router = APIRouter(
 )
 
 
-@router.post("/upload")
-async def upload_image(file: UploadFile = File(...), user_id: str = Form(None)):
-    if file.content_type not in ["image/jpeg", "image/png"]:
-        raise HTTPException(status_code=400, detail="Only .jpeg and .png files allowed")
+# The extension comes from the checked type, never from the client's filename
+# (which could say .html or .svg), and the bytes must start like that type.
+_IMAGE_TYPES = {
+    "image/jpeg": ("jpg", b"\xff\xd8\xff"),
+    "image/png": ("png", b"\x89PNG\r\n\x1a\n"),
+}
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
-    ext = (file.filename or "image.jpg").split(".")[-1].lower()
+
+@router.post("/upload")
+async def upload_image(file: UploadFile = File(...),
+                       user_id: str = Form(None, max_length=128)):
+    if file.content_type not in _IMAGE_TYPES:
+        raise HTTPException(status_code=400, detail="Only .jpeg and .png files allowed")
+    ext, magic = _IMAGE_TYPES[file.content_type]
+
+    file_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(file_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Image is larger than 10 MB")
+    if not file_bytes.startswith(magic):
+        raise HTTPException(status_code=400, detail="File content is not a JPEG or PNG image")
     filename = f"{uuid.uuid4()}.{ext}"
-    file_bytes = await file.read()
 
     object_key, image_url = save_image(file_bytes, prefix="uploads", filename=filename)
 

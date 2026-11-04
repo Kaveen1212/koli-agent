@@ -1,6 +1,6 @@
 import hmac
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from fastapi import APIRouter, Header, HTTPException, Response
 from fastapi.concurrency import run_in_threadpool
 from typing import Optional
@@ -13,9 +13,13 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 
 
 class AgentRequest(BaseModel):
-    user_id:   str
-    message:   str
-    image_url: Optional[str] = None
+    # The backend's SendChatDto already bounds these; the agent re-checks
+    # rather than trusting the caller, and refuses fields it does not know.
+    model_config = ConfigDict(extra="forbid")
+
+    user_id:   str = Field(min_length=1, max_length=128)
+    message:   str = Field(max_length=4000)
+    image_url: Optional[str] = Field(default=None, max_length=1000)
 
 
 def _require_service_token(token: Optional[str]) -> None:
