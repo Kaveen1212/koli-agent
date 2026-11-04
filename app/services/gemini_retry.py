@@ -2,6 +2,8 @@
 import time
 from google.genai import errors
 
+from app.observability import record_gemini_error
+
 
 def with_retry(fn, *args, max_attempts: int = 4, base_delay: float = 2.0, **kwargs):
     """Call fn(*args, **kwargs), retrying on transient Gemini errors (503/429).
@@ -13,6 +15,7 @@ def with_retry(fn, *args, max_attempts: int = 4, base_delay: float = 2.0, **kwar
             return fn(*args, **kwargs)
         except (errors.ServerError, errors.ClientError) as e:
             code = getattr(e, "code", None)
+            record_gemini_error("sdk", code)
             if code in (429, 503):  # rate limit or overload — retry
                 last_error = e
                 if attempt < max_attempts - 1:

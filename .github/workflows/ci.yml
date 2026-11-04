@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12" # matches the Dockerfile base image (python:3.12-slim)
+      - name: Install ruff
+        run: pip install "ruff>=0.8,<1"
+      # Check only. Never --fix: CI must not rewrite code. Rules: pyproject.toml.
+      - name: ruff check
+        run: ruff check --no-fix --output-format=github .
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: koli
+          POSTGRES_PASSWORD: koli_ci
+          POSTGRES_DB: koli_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U koli -d koli_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Throwaway CI database on the service container above.
+      DATABASE_URL: postgresql://koli:koli_ci@localhost:5432/koli_ci
+      # GEMINI_API_KEY and INTERNAL_SERVICE_TOKEN are intentionally NOT set:
+      # tests/conftest.py supplies placeholders, and tests marked `needs_gemini`
+      # skip themselves. Never add a real key to CI.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # cairosvg needs the cairo/pango shared libraries at import time.
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0 shared-mime-info
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest
+      - name: alembic upgrade head
+        run: python -m alembic upgrade head
+      - name: Check the migration state is at a single head
+        run: |
+          test "$(python -m alembic heads | grep -c '(head)')" = "1"
+          python -m alembic current | grep '(head)'
+      - name: Check the agent's tables are in the agent schema, none in public
+        run: |
+          python - <<'PY'
+          import os, psycopg2
+          cur = psycopg2.connect(os.environ["DATABASE_URL"]).cursor()
+          cur.execute("SELECT schemaname, tablename FROM pg_tables WHERE tablename IN "
+                      "('artwork_embeddings','chat_sessions','generations','room_uploads','alembic_version')")
+          found = sorted(cur.fetchall())
+          print(found)
+          assert found == [("agent", t) for t in sorted(
+              ["alembic_version", "artwork_embeddings", "chat_sessions", "generations", "room_uploads"])], found
+          PY
+      - name: pytest
+        run: python -m pytest -q -p no:cacheprovider
+
+  docker:
+    name: docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: docker build (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: koli-agent:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Single stable check name to require in branch protection.
+  ci:
+    name: ci
+    if: always()
+    needs: [lint, test, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All jobs must succeed
+        run: |
+          echo '${{ toJSON(needs) }}'
+          test "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" = "false"

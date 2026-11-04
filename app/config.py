@@ -1,5 +1,7 @@
 from dotenv import load_dotenv
+import logging
 import os
+from urllib.parse import urlsplit
 
 
 load_dotenv()
@@ -19,6 +21,38 @@ SECRET_KEY: str    = os.getenv("SECRET_KEY", "")
 BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:4000/v1")
 INTERNAL_SERVICE_TOKEN: str = os.getenv("INTERNAL_SERVICE_TOKEN", "")
 BACKEND_TIMEOUT_SECONDS: float = float(os.getenv("BACKEND_TIMEOUT_SECONDS", "10"))
+
+
+
+def parse_media_public_base_url(raw: str) -> str:
+    """The media host's base URL without a trailing slash, or "" when unset or
+    unusable. Only an https URL with a host (no credentials, query or fragment)
+    is accepted; anything else is ignored with a warning rather than stopping
+    the agent, which then keeps fetching media from the backend."""
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+        parts.port  # noqa: B018 - raises ValueError on a non-numeric port
+        valid = (parts.scheme == "https" and bool(parts.hostname)
+                 and not (parts.username or parts.password or parts.query or parts.fragment))
+    except ValueError:
+        valid = False
+    if not valid:
+        logging.getLogger(__name__).warning(
+            "MEDIA_PUBLIC_BASE_URL is not a valid https URL; ignoring it "
+            "(media is fetched from BACKEND_URL)")
+        return ""
+    return raw.rstrip("/")
+
+
+# Public media host (Cloudflare R2 behind e.g. https://media.artnuss.com). Set it
+# in the SAME step as the backend's STORAGE_DRIVER=s3: the backend then answers
+# /uploads/<key> with a redirect, which the agent never follows, so old
+# "/uploads/<key>" references must be mapped to "<this>/<key>" directly.
+# Unset (default): "/uploads/..." is fetched from BACKEND_URL's origin.
+MEDIA_PUBLIC_BASE_URL: str = parse_media_public_base_url(os.getenv("MEDIA_PUBLIC_BASE_URL", ""))
 
 AWS_ACCESS_KEY_ID:     str = os.getenv("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
@@ -72,11 +106,26 @@ COST_PER_GENERATION: float = float(os.getenv("COST_PER_GENERATION", "0.039"))
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2")
 EMBEDDING_DIM:   int = int(os.getenv("EMBEDDING_DIM", "3072"))
 
-# Background catalogue indexing (services/indexer.py): how often new or edited
-# products are embedded for search, and the most embeddings one pass may create
-# so a bulk import can't spike Gemini spend. 0 turns the indexer off.
-INDEX_INTERVAL_SECONDS: int = int(os.getenv("INDEX_INTERVAL_SECONDS", "600"))
+# Background catalogue indexing (services/indexer.py). The indexer follows the
+# backend's change feed (GET /v1/internal/products/changes), so a poll is one cheap
+# request and the default is 60 s (it was 600 s when every pass walked the whole
+# catalogue). INDEX_MAX_PER_RUN caps the embeddings one pass may create so a bulk
+# import can't spike Gemini spend; the cursor stops there and the next pass resumes.
+# 0 turns the indexer off.
+INDEX_INTERVAL_SECONDS: int = int(os.getenv("INDEX_INTERVAL_SECONDS", "60"))
 INDEX_MAX_PER_RUN:      int = int(os.getenv("INDEX_MAX_PER_RUN", "100"))
+# A full catalogue walk (resync) heals anything the feed missed (a transaction
+# that committed after the backend's 10 s safety window, a failed embedding) and
+# prunes vectors for products that are no longer sellable. Also runs on first
+# start and whenever the cursor is in doubt or older than INDEX_FEED_STALE_DAYS
+# (the backend purges feed rows at 30 days).
+INDEX_RESYNC_HOURS:     float = float(os.getenv("INDEX_RESYNC_HOURS", "24"))
+INDEX_FEED_STALE_DAYS:  float = float(os.getenv("INDEX_FEED_STALE_DAYS", "25"))
+# A SOLD product's vector is kept this many days before it is dropped (it stays
+# out of search either way: the backend never returns sold work to the agent). A
+# relist inside the window then costs no embedding. 0 (default) drops it at once.
+# Every other removal reason drops the vector immediately.
+INDEX_SOLD_GRACE_DAYS:  float = float(os.getenv("INDEX_SOLD_GRACE_DAYS", "0"))
 
 # Image generation / vision model names.
 IMAGE_MODEL:  str = os.getenv("IMAGE_MODEL", "gemini-3.1-flash-image")
@@ -86,3 +135,9 @@ AGENT_MODEL:  str = os.getenv("AGENT_MODEL", "gemini-2.5-flash")
 # Interactive API docs (/docs, /redoc, /openapi.json) are off unless this is
 # explicitly enabled (local development only).
 ENABLE_API_DOCS: bool = os.getenv("ENABLE_API_DOCS", "false").strip().lower() in ("1", "true", "yes", "on")
+
+# Observability (app/observability.py). /metrics returns 404 unless METRICS_TOKEN
+# is set, and then requires "Authorization: Bearer <token>".
+METRICS_TOKEN: str = os.getenv("METRICS_TOKEN", "")
+# Optional salt for the hashed user key in the per-turn log line.
+LOG_HASH_SALT: str = os.getenv("LOG_HASH_SALT", "")

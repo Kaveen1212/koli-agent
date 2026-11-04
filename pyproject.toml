@@ -14,6 +14,7 @@ dependencies = [
     "langgraph>=1.2.2",
     "pgvector>=0.4.2",
     "pillow>=12.2.0",
+    "prometheus-client>=0.21.0",
     "psycopg2>=2.9.12",
     "python-dotenv>=1.2.2",
     "python-multipart>=0.0.30",
@@ -26,3 +27,31 @@ dependencies = [
 dev = [
     "pytest>=9.0.3",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "needs_gemini: calls the live Gemini API; skipped unless GEMINI_API_KEY is a real key",
+]
+
+# Lint: `ruff check .` (CI never runs --fix). Deliberately narrow: pyflakes
+# errors plus the pycodestyle E4/E7/E9 checks. Style/import-order/upgrade rules
+# are left off so enabling the linter does not demand a codebase-wide rewrite.
+[tool.ruff]
+extend-exclude = ["static"]
+
+[tool.ruff.lint]
+# S608: SQL assembled with an f-string, +, % or .format() (SQL injection).
+# Values must be bind parameters (text("... = :id"), {"id": ...}).
+# tests/test_sql_guard.py also catches fragments like sql += f" AND x = {v}".
+select = ["E4", "E7", "E9", "F", "S608"]
+
+[tool.ruff.lint.per-file-ignores]
+# env.py loads .env before importing app code, and imports the models only so
+# their tables register on Base.metadata (autogenerate).
+# Its one f-string SQL interpolates the AGENT_SCHEMA constant: identifiers
+# cannot be bind parameters, and no request data reaches migrations.
+"migrations/env.py" = ["E402", "F401", "S608"]
+# Alembic's generated template imports sqlalchemy even when unused.
+"migrations/versions/*.py" = ["F401"]
+# Assigning a lambda to a local name in a test helper.
+"tests/*.py" = ["E731"]

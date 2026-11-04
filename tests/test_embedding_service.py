@@ -1,6 +1,9 @@
+import pytest
+
 from app.services.embedding_service import embed_query
 
 
+@pytest.mark.needs_gemini
 def test_embed_query_returns_3072_floats():
     vector = embed_query("blue abstract")
     assert isinstance(vector, list), "embed_query must return a list"

@@ -1,18 +1,18 @@
 import os
 import json
-import uuid
 import base64
 import logging
 import httpx
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.messages import messages_from_dict, messages_to_dict
-from langgraph.graph import StateGraph, MessagesState, END
+from langgraph.graph import StateGraph, MessagesState
 from langgraph.prebuilt import ToolNode, tools_condition
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.tools import TOOLS
 from app.config import GEMINI_API_KEY, AGENT_MODEL, MAX_HISTORY_TURNS
 from app.database import SessionLocal
+from app.observability import TurnTracker, request_id_from
 from app.services.net import UnsafeImageURL, fetch_image
 from sqlalchemy import text
 
@@ -160,7 +160,7 @@ def _text_of(msg) -> str:
     return (content or "").strip()
 
 
-def _recover_reply(messages: list) -> str:
+def _recover_reply(messages: list, config: dict | None = None) -> str:
     """Gemini sometimes ends a turn with no text at all — typically right after a
     tool came back empty — and the backend turns an empty reply into an error
     for the customer. Ask once more with tool calls disabled, then fall back to
@@ -172,14 +172,30 @@ def _recover_reply(messages: list) -> str:
     try:
         text_only = model.bind_tools(TOOLS, tool_choice="none")
         response = text_only.invoke(_prepare_for_gemini(
-            [SystemMessage(content=SYSTEM_PROMPT)] + convo + [_NUDGE]))
+            [SystemMessage(content=SYSTEM_PROMPT)] + convo + [_NUDGE]), config=config)
         return _text_of(response) or _FALLBACK_REPLY
     except Exception:
         logger.exception("Empty-reply recovery failed; using the fixed reply")
         return _FALLBACK_REPLY
 
 
-def process_message(user_id: str, message: str, image_url: str = None) -> str:
+def process_message(user_id: str, message: str, image_url: str = None,
+                    request_id: str | None = None) -> str:
+    """One chat turn. Emits exactly one JSON log line (observability.TurnTracker)
+    whether it succeeds or raises; the line carries no message text or raw ids.
+    """
+    tracker = TurnTracker(request_id or request_id_from(None), user_id,
+                          has_image=bool(image_url))
+    try:
+        reply = _run_turn(user_id, message, image_url, tracker)
+    except Exception as exc:
+        tracker.finish("error", exc)
+        raise
+    tracker.finish("ok")
+    return reply
+
+
+def _run_turn(user_id: str, message: str, image_url: str | None, tracker: TurnTracker) -> str:
     history = _load_history(user_id)
 
     # The backend sends its own uploads as "/uploads/..." paths.
@@ -200,12 +216,13 @@ def process_message(user_id: str, message: str, image_url: str = None) -> str:
 
     # Tools read the caller's identity from the config (see tools/_identity.py),
     # not from their own arguments, which the model — and so the visitor — picks.
-    result = graph.invoke({"messages": history},
-                          config={"configurable": {"user_id": user_id}})
+    config = {"configurable": {"user_id": user_id}, "callbacks": [tracker]}
+    result = graph.invoke({"messages": history}, config=config)
     last_msg = result["messages"][-1]
     reply = _text_of(last_msg)
     if not reply:
-        reply = _recover_reply(result["messages"])
+        tracker.recovered_empty_reply = True
+        reply = _recover_reply(result["messages"], config={"callbacks": [tracker]})
         last_msg = AIMessage(content=reply)
     history.append(last_msg)
 

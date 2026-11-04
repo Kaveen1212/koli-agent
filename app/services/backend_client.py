@@ -13,11 +13,24 @@ product lookups moved behind the API.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 import httpx
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from app.config import BACKEND_URL, INTERNAL_SERVICE_TOKEN, BACKEND_TIMEOUT_SECONDS
+from app.services.net import media_public_url
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +68,12 @@ def _get(path: str, params: dict[str, Any]) -> Any:
         logger.error("Backend %s returned %s: %s", path, res.status_code, res.text[:300])
         raise BackendUnavailable(f"Backend returned {res.status_code}")
 
-    body = res.json()
+    try:
+        body = res.json()
+    except ValueError as exc:
+        # A 200 that is not JSON (a proxy's HTML page, a truncated body).
+        logger.error("Backend %s returned a non-JSON body: %s", path, res.text[:200])
+        raise BackendUnavailable(f"Backend returned a non-JSON body for {path}") from exc
     # The backend wraps every response as { success, data, timestamp }.
     return body.get("data", body) if isinstance(body, dict) else body
 
@@ -96,14 +114,136 @@ def catalogue_page(after: str | None = None, limit: int = 100) -> list[dict]:
     return _get("/internal/products/catalogue", params) or []
 
 
+# The reasons the backend writes (product-change.ts UPSERT_REASONS / DELETE_REASONS;
+# docs/CATALOGUE_FEED.md). `reason` is a free VARCHAR on its side, so a newer
+# backend may send one this agent has not heard of: the row is still valid
+# (`op` decides what to do), it is just counted as OTHER.
+UPSERT_REASONS = frozenset({
+    "PUBLISHED", "RESTORED", "RELISTED", "RESTOCKED", "CONTENT", "SELLER_RESTORED",
+})
+DELETE_REASONS = frozenset({
+    "SOLD", "ARCHIVED", "REJECTED", "UNPUBLISHED", "REVIEW", "SUBMITTED",
+    "OUT_OF_STOCK", "DELETED", "SELLER_BANNED", "SELLER_DEACTIVATED", "SELLER_OFFLINE",
+})
+CHANGE_REASONS = UPSERT_REASONS | DELETE_REASONS
+OTHER_REASON = "OTHER"
+
+_FEED_MAX_ITEMS = 500   # the backend's maximum `limit`
+
+
+class ChangeItem(BaseModel):
+    """One ProductChange row as GET /internal/products/changes returns it."""
+    # Unknown extra keys are ignored (a backend may add one); wrong types are not.
+    model_config = ConfigDict(extra="ignore")
+
+    seq: StrictInt = Field(ge=0)
+    productId: StrictStr = Field(min_length=1, max_length=64)
+    op: Literal["UPSERT", "DELETE"]
+    reason: StrictStr = Field(min_length=1, max_length=40)
+    contentUpdatedAt: AwareDatetime | None = None
+
+    @field_validator("contentUpdatedAt", mode="before")
+    @classmethod
+    def _iso_string_only(cls, v):
+        # pydantic would also take a number as a unix time; the feed sends ISO text.
+        if v is not None and not isinstance(v, str):
+            raise ValueError("contentUpdatedAt must be an ISO 8601 string")
+        return v
+
+    @field_validator("reason")
+    @classmethod
+    def _bounded_reason(cls, v: str) -> str:
+        return v if v in CHANGE_REASONS else OTHER_REASON
+
+    @model_validator(mode="after")
+    def _reason_matches_op(self):
+        # A known reason says which op it belongs to; a mismatch is a corrupt row.
+        wrong = DELETE_REASONS if self.op == "UPSERT" else UPSERT_REASONS
+        if self.reason in wrong:
+            raise ValueError(f"reason {self.reason} does not belong to op {self.op}")
+        return self
+
+
+class FeedLag(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    seconds: StrictInt = Field(ge=0)
+    withheld: StrictInt = Field(ge=0)
+
+
+class ChangesPage(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    items: list[ChangeItem] = Field(max_length=_FEED_MAX_ITEMS)
+    nextSince: StrictInt = Field(ge=0)
+    hasMore: StrictBool
+    lag: FeedLag | None = None
+
+
+def _check_changes_page(page: ChangesPage, since: int, limit: int) -> None:
+    """The contract between the items and the cursor (CATALOGUE_FEED.md).
+
+    A page holds rows with seq > since in ascending order, and nextSince is the
+    seq of its last row; with nothing ready it equals `since`. Anything that
+    would move the cursor past what was actually delivered skips changes, so it
+    is refused. A nextSince BELOW `since` is left for the indexer, which treats
+    it as a feed that was reset and starts a full resync.
+    """
+    seqs = [it.seq for it in page.items]
+    if len(seqs) > limit:
+        raise ValueError(f"{len(seqs)} items for limit {limit}")
+    if seqs and seqs[0] <= since:
+        raise ValueError(f"item seq {seqs[0]} is not after since {since}")
+    if any(b <= a for a, b in zip(seqs, seqs[1:])):
+        raise ValueError("item seq values are not strictly ascending")
+    if seqs and page.nextSince > seqs[-1]:
+        raise ValueError(f"nextSince {page.nextSince} is beyond the last item seq {seqs[-1]}")
+    if not seqs and page.nextSince > since:
+        raise ValueError(f"empty page but nextSince {page.nextSince} is beyond since {since}")
+
+
+def changes_page(since: int = 0, limit: int = 200) -> dict:
+    """One page of the catalogue change feed (docs/CATALOGUE_FEED.md in the backend).
+
+    Returns {items: [{seq, productId, op: UPSERT|DELETE, reason, contentUpdatedAt}],
+    nextSince, hasMore, lag}, validated: types, op, `reason` (bounded to the known
+    set, else OTHER) and the cursor rules in _check_changes_page. A malformed page
+    raises BackendUnavailable, so the caller's cursor stays where it was and the
+    page is read again on the next pass. Store nextSince only after the page is
+    processed.
+    """
+    body = _get("/internal/products/changes", {"since": since, "limit": limit})
+    try:
+        page = ChangesPage.model_validate(body)
+        _check_changes_page(page, since, limit)
+    except ValidationError as exc:
+        # Locations and messages only: the error's `input` would echo the body.
+        first = exc.errors()[0]
+        where = ".".join(str(p) for p in first["loc"]) or "body"
+        logger.error("Malformed /changes page (since=%d): %s: %s", since, where, first["msg"])
+        raise BackendUnavailable(
+            f"Backend returned a malformed /changes page ({where}: {first['msg']})") from exc
+    except ValueError as exc:
+        logger.error("Inconsistent /changes page (since=%d): %s", since, exc)
+        raise BackendUnavailable(f"Backend returned an inconsistent /changes page: {exc}") from exc
+    return page.model_dump(mode="json")
+
+
 def absolute_media_url(path: str) -> str:
     """The backend stores uploads as "/uploads/..."; resolve against its origin.
 
     Uses the internal BACKEND_URL (e.g. http://backend:3000), so image fetches
-    stay on the private network instead of going out through Cloudflare.
+    stay on the private network instead of going out through Cloudflare. When
+    MEDIA_PUBLIC_BASE_URL is set (storage moved to R2) the backend only redirects
+    "/uploads/<key>" there, and the agent never follows redirects, so the path is
+    mapped straight to "<MEDIA_PUBLIC_BASE_URL>/<key>". Absolute URLs (rows
+    written after the move) pass through unchanged.
     """
     if path.startswith(("http://", "https://")):
         return path
+    public = media_public_url("/" + path.lstrip("/"))
+    if public is not None:
+        return public
     origin = BACKEND_URL.rstrip("/").removesuffix("/v1")
     return f"{origin}/{path.lstrip('/')}"
 

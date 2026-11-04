@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy import text
 from app.database import SessionLocal
+from app.observability import record_quota_rejection
 from app.config import (
     MAX_GENERATIONS_PER_DAY, MAX_GLOBAL_GENERATIONS_PER_DAY, COST_PER_GENERATION,
 )
@@ -39,9 +40,11 @@ def count_today(user_id: str | None = None) -> int:
 def check_daily_limits(user_id: str) -> None:
     """Raise RateLimitExceeded if this user, or the whole site, is at today's cap."""
     if MAX_GENERATIONS_PER_DAY and count_today(user_id) >= MAX_GENERATIONS_PER_DAY:
+        record_quota_rejection("user")
         raise RateLimitExceeded(
             f"Daily visualization limit of {MAX_GENERATIONS_PER_DAY} reached.")
     if MAX_GLOBAL_GENERATIONS_PER_DAY and count_today() >= MAX_GLOBAL_GENERATIONS_PER_DAY:
+        record_quota_rejection("global")
         raise RateLimitExceeded(
             "Visualizations are unavailable for the rest of today. Please try again tomorrow.")
 

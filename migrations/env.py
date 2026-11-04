@@ -1,18 +1,19 @@
+import logging
 import os
 from logging.config import fileConfig
 
 from dotenv import load_dotenv
 from sqlalchemy import engine_from_config
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 
 from alembic import context
 
 # Load .env so DATABASE_URL is available here just as it is for the app.
 load_dotenv()
 from app.database import Base
-from app.models import room_upload, artwork_embedding, chat_session, generation
+from app.models import room_upload, artwork_embedding, chat_session, generation, index_state
 
-AGENT_TABLES = {"artwork_embeddings", "chat_sessions", "room_uploads", "generations"}
+AGENT_TABLES = {"artwork_embeddings", "chat_sessions", "room_uploads", "generations", "index_state"}
 
 def include_object(object, name, type_, reflected, compare_to):
     if type_ == "table" and name not in AGENT_TABLES:
@@ -21,6 +22,13 @@ def include_object(object, name, type_, reflected, compare_to):
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
+# The agent owns this schema (DB-6); Prisma's tables stay in `public`. `public`
+# remains on the search_path for the pgvector `vector` type.
+AGENT_SCHEMA = "agent"
+SEARCH_PATH_OPTIONS = f"-csearch_path={AGENT_SCHEMA},public"
+# The revision that moved the tables (migrations/versions/a01c5e7d9b21_*.py).
+A01_REVISION = "a01c5e7d9b21"
+
 config = context.config
 
 # The DB URL is supplied by the environment, not alembic.ini, so credentials
@@ -77,10 +85,77 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         include_object=include_object,
+        version_table_schema=AGENT_SCHEMA,
     )
 
     with context.begin_transaction():
         context.run_migrations()
+
+
+def _prepare_agent_schema(connection) -> None:
+    """Idempotent. Runs before Alembic reads its version table.
+
+    * `agent` must exist before the version table can live in it.
+    * pgvector is installed in `public` explicitly: with `agent` first on the
+      search_path, a bare CREATE EXTENSION (revision b7c1d2e3f4a5) would
+      otherwise install it into `agent` on a fresh database.
+    * An existing deployment still has `public.alembic_version`; move it so
+      Alembic sees the revision history instead of re-running everything.
+    """
+    connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {AGENT_SCHEMA}"))
+    connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector SCHEMA public"))
+    connection.execute(text(f"""
+        DO $$
+        BEGIN
+            IF to_regclass('public.alembic_version') IS NOT NULL
+               AND to_regclass('{AGENT_SCHEMA}.alembic_version') IS NULL THEN
+                ALTER TABLE public.alembic_version SET SCHEMA {AGENT_SCHEMA};
+            END IF;
+        END
+        $$
+    """))
+    stray = [r[0] for r in connection.execute(text(
+        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = ANY(:t)"
+    ), {"t": ["artwork_embeddings", "chat_sessions", "generations", "room_uploads"]})]
+    if stray and connection.execute(text(
+            f"SELECT to_regclass('{AGENT_SCHEMA}.chat_sessions')")).scalar() is not None:
+        logging.getLogger("alembic.env").warning(
+            "public.%s exist next to the agent.* tables: a pre-A01 image has run against "
+            "this database. The copies in public are not used by the agent and are not "
+            "migrated; check they are empty and drop them (Prisma reports them as drift).",
+            ", public.".join(stray))
+    connection.commit()
+
+
+def _applied_versions(connection) -> set[str]:
+    if connection.execute(text(
+            f"SELECT to_regclass('{AGENT_SCHEMA}.alembic_version')")).scalar() is None:
+        return set()
+    return {r[0] for r in connection.execute(
+        text(f"SELECT version_num FROM {AGENT_SCHEMA}.alembic_version"))}
+
+
+def _includes_a01(versions: set[str]) -> bool:
+    from alembic.script import ScriptDirectory
+    script = ScriptDirectory.from_config(config)
+    return any(
+        A01_REVISION in {r.revision for r in script.iterate_revisions(v, "base")}
+        for v in versions
+    )
+
+
+def _return_version_table_after_downgrade(connection, was_at_a01: bool) -> None:
+    """A downgrade past A01 must leave the old image a working database.
+
+    The old image looks for `public.alembic_version`. Alembic can only record the
+    downgrade in the table it started with (`agent.alembic_version`), so the
+    table is moved back to `public` afterwards.
+    """
+    if not was_at_a01 or _includes_a01(_applied_versions(connection)):
+        return
+    connection.execute(text("DROP TABLE IF EXISTS public.alembic_version"))
+    connection.execute(text(f"ALTER TABLE {AGENT_SCHEMA}.alembic_version SET SCHEMA public"))
+    connection.commit()
 
 
 def run_migrations_online() -> None:
@@ -94,17 +169,26 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args={"options": SEARCH_PATH_OPTIONS},
     )
 
     with connectable.connect() as connection:
+        _prepare_agent_schema(connection)
+        was_at_a01 = _includes_a01(_applied_versions(connection))
+        connection.commit()
+
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
             include_object=include_object,
+            version_table_schema=AGENT_SCHEMA,
         )
 
         with context.begin_transaction():
             context.run_migrations()
+        connection.commit()
+
+        _return_version_table_after_downgrade(connection, was_at_a01)
 
 
 if context.is_offline_mode():

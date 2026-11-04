@@ -146,6 +146,10 @@ docker exec -it koli-postgres psql -U koli_user -d koli_art -c "CREATE EXTENSION
 uv run python -m alembic upgrade head
 ```
 
+The agent's tables (`artwork_embeddings`, `chat_sessions`, `generations`, `room_uploads`) and its `alembic_version` live in the **`agent` schema**, not `public` (which belongs to the backend's Prisma). The app and Alembic both put `agent,public` on the `search_path`. Never run a pre-`a01c5e7d9b21` image against a migrated database; for an emergency rollback use `alembic downgrade b7c1d2e3f4a5` or `scripts/revert_agent_schema.sql`.
+
+The indexer follows the backend's catalogue change feed (`app/services/indexer.py`). Migration `a04d7b3e9c52` (A04) adds `artwork_embeddings.content_hash`, `source_content_updated_at`, `sold_at` and the `agent.index_state` cursor table; it is additive, so run it BEFORE deploying the image that needs it (search filters on `sold_at`). `koli_agent_index_lag_seconds` is the time since the indexer was last fully caught up with the feed.
+
 **6. Seed test data and generate embeddings:**
 ```bash
 uv run python scripts/seed_products.py
@@ -170,7 +174,15 @@ cd "Koli agent"
 uv run rq worker --url redis://:koli_redis_pass@localhost:6379
 ```
 
+Observability: every chat turn logs one JSON line on the `koli.turn` logger (`requestId`, hashed `user` key, `latencyMs`, `toolCalls`, `tokens`, `status`; never raw ids or message text). The agent reads `X-Request-ID` if the caller sends it and echoes it back. `/metrics` exposes `koli_agent_turns_total`, `koli_agent_turn_latency_p95_seconds`, `koli_agent_gemini_errors_total`, `koli_agent_index_lag_seconds` and `koli_agent_quota_rejections_total` (plus a latency histogram, tool calls, tokens, index state).
+
 API docs (local dev only): set `ENABLE_API_DOCS=true`, then open http://127.0.0.1:8000/docs. They are disabled by default (and in production).
+
+---
+
+## CI
+
+GitHub Actions runs lint, `alembic upgrade head` + `pytest` against pgvector, and a `docker build` on every PR. See [docs/CI.md](docs/CI.md), including how to make it a required check on `main`.
 
 ---
 
@@ -268,6 +280,14 @@ This embeds any products not yet in `artwork_embeddings`. Only embedded products
 | `AWS_ENDPOINT_URL` | No | R2 endpoint URL (leave empty for AWS S3) |
 | `AWS_CLOUDFRONT_URL` | No | CDN URL for public image serving |
 | `BACKEND_URL` | Yes | Backend API base URL. In production use the docker-network URL `http://backend:3000/v1`, never the public `https://api.artnuss.com` (the edge blocks `/v1/internal/*`). Default `http://localhost:4000/v1` is for local dev |
+| `MEDIA_PUBLIC_BASE_URL` | No | Public media host, https only (e.g. `https://media.artnuss.com`). When set, old `/uploads/<key>` references (visualise/decor tools, chat images, indexer image embeddings) are fetched from `<MEDIA_PUBLIC_BASE_URL>/<key>` instead of the backend, because after the R2 switch the backend only 301-redirects them and the agent never follows redirects. Must be set in the agent env in the same step as the backend's `STORAGE_DRIVER=s3` switch. Absolute media URLs are used as given. An invalid value is ignored with a warning. Unset (default) = fetch from `BACKEND_URL` |
+| `INDEX_INTERVAL_SECONDS` | No | Seconds between indexer polls of the backend change feed (`/v1/internal/products/changes`). Default `60` (was `600` when every pass walked the whole catalogue). `0` disables the indexer |
+| `INDEX_MAX_PER_RUN` | No | Most embedding attempts (Gemini calls) one pass may make. Default `100`. The feed cursor stops at the first unprocessed row and the next pass resumes there; deletes are never capped |
+| `INDEX_RESYNC_HOURS` | No | Full catalogue walk (heals missed changes, prunes vanished products) every N hours, and on first start. Default `24` |
+| `INDEX_FEED_STALE_DAYS` | No | If the indexer has not been caught up with the feed for this long, resync instead of reading the feed (the backend purges feed rows at 30 days). Default `25` |
+| `INDEX_SOLD_GRACE_DAYS` | No | Keep a SOLD product's vector (hidden from search) this many days so a relist costs no embedding. Default `0` = drop immediately. All other removal reasons drop at once |
 | `ENABLE_API_DOCS` | No | `true` exposes `/docs`, `/redoc`, `/openapi.json` (local dev only; default off) |
+| `METRICS_TOKEN` | No | Enables `GET /metrics` (Prometheus), scraped with `Authorization: Bearer <token>`. Unset = the route returns 404. Keep it off public routes |
+| `LOG_HASH_SALT` | No | Optional salt for the hashed user key in the per-turn log line |
 
 Backend/deploy verified: auto-deploy pipeline live as of 2026-07-05.
