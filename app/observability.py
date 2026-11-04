@@ -22,6 +22,7 @@ from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 from prometheus_client.core import GaugeMetricFamily
 
 from app.config import LOG_HASH_SALT
+from app.services.backend_client import CHANGE_REASONS, OTHER_REASON
 
 turn_logger = logging.getLogger("koli.turn")
 
@@ -59,6 +60,15 @@ INDEX_EMBEDS = Counter("koli_agent_index_embeddings_total",
 INDEX_PRUNED = Counter("koli_agent_index_pruned_total",
                        "Vectors removed because the product stopped being sellable.",
                        ["reason"], registry=REGISTRY)
+# The `reason` label is bounded: the backend's reasons plus the two the indexer
+# invents; anything else (a new backend reason, junk) is counted as OTHER.
+PRUNE_REASONS = frozenset(CHANGE_REASONS | {"NOT_SELLABLE", "RESYNC"})
+
+
+def prune_reason_label(reason) -> str:
+    return reason if isinstance(reason, str) and reason in PRUNE_REASONS else OTHER_REASON
+
+
 _PROCESS_START = time.time()
 
 # p95 over the most recent turns: the histogram gives Prometheus the full
@@ -123,7 +133,7 @@ def record_index_run(stats: Optional[dict], failed: bool) -> None:
         if stats.get("embedded"):
             INDEX_EMBEDS.inc(stats["embedded"])
         for reason, n in (stats.get("pruned_reasons") or {}).items():
-            INDEX_PRUNED.labels(reason=reason).inc(n)
+            INDEX_PRUNED.labels(reason=prune_reason_label(reason)).inc(n)
 
 
 # --- identity and request id -------------------------------------------------
