@@ -452,6 +452,47 @@ def test_index_lag_only_resets_when_caught_up_with_the_feed():
     assert obs.REGISTRY.get_sample_value("koli_agent_index_pruned_total", {"reason": "SOLD"}) >= 2
 
 
+# -- PgStore SQL shape (no database needed) -----------------------------------
+
+class _Conn:
+    """Records the statements PgStore sends, like a connection would receive them."""
+
+    def __init__(self):
+        self.sent = []
+        self.commits = 0
+
+    def execute(self, stmt, params=None):
+        self.sent.append((stmt, params))
+
+    def commit(self):
+        self.commits += 1
+
+
+def test_save_state_updates_only_the_named_columns_with_bound_values():
+    from sqlalchemy.dialects import postgresql
+    conn = _Conn()
+    cursor = 7
+    indexer.PgStore(conn).save_state(feed_cursor=cursor, resync_due_at=NOW)
+    assert conn.commits == 1 and len(conn.sent) == 2
+    compiled = conn.sent[1][0].compile(dialect=postgresql.dialect())
+    sql = str(compiled)
+    assert sql.startswith("UPDATE index_state SET feed_cursor=%(feed_cursor)s, "
+                          "resync_due_at=%(resync_due_at)s, updated_at=now() WHERE")
+    assert "last_caught_up_at" not in sql
+    assert compiled.params["feed_cursor"] == cursor and compiled.params["resync_due_at"] == NOW
+
+
+def test_save_state_refuses_unknown_columns_and_does_nothing_for_none():
+    conn = _Conn()
+    store = indexer.PgStore(conn)
+    with pytest.raises(ValueError):
+        store.save_state(feed_cursor=1, updated_at=NOW)   # updated_at is not settable
+    with pytest.raises(ValueError):
+        store.save_state(**{"feed_cursor = 1; DROP TABLE x; --": 1})
+    store.save_state()
+    assert conn.sent == [] and conn.commits == 0
+
+
 # -- the SQL, against a real database (CI, or a local pgvector) ------------------
 
 def _pg():

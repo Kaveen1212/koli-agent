@@ -34,7 +34,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import text
+from sqlalchemy import func, text, update
 
 from app.config import (
     EMBEDDING_MODEL,
@@ -45,6 +45,7 @@ from app.config import (
     INDEX_SOLD_GRACE_DAYS,
 )
 from app.database import engine
+from app.models.index_state import IndexState
 from app.observability import record_index_run
 from app.services.backend_client import (
     BackendUnavailable,
@@ -132,16 +133,21 @@ class PgStore:
         return dict(row)
 
     def save_state(self, **fields) -> None:
+        """Store some of the four state columns. Anything else is a ValueError.
+
+        The UPDATE is built with SQLAlchemy Core from the IndexState table, so
+        a column name can only be one the model defines (checked against the
+        allow-list first) and every value is a bind parameter.
+        """
         unknown = set(fields) - set(self._STATE_COLUMNS)
         if unknown:
             raise ValueError(f"unknown index_state columns: {sorted(unknown)}")
         if not fields:
             return
-        sets = ", ".join(f"{c} = :{c}" for c in fields)
         self.conn.execute(text(
             "INSERT INTO index_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING"))
-        self.conn.execute(text(f"UPDATE index_state SET {sets}, updated_at = now() WHERE id = 1"),
-                          fields)
+        self.conn.execute(update(IndexState).where(IndexState.id == 1)
+                          .values(**fields, updated_at=func.now()))
         self.conn.commit()
 
     @staticmethod
@@ -150,17 +156,17 @@ class PgStore:
                 "content_updated_at": r["source_content_updated_at"],
                 "updated_at": r["source_updated_at"], "sold_at": r["sold_at"]}
 
-    _COLS = ("artwork_id, content_hash, source_content_updated_at, source_updated_at, sold_at")
-
     def known(self) -> dict[str, dict]:
         rows = self.conn.execute(text(
-            f"SELECT {self._COLS} FROM artwork_embeddings")).mappings().all()
+            "SELECT artwork_id, content_hash, source_content_updated_at, "
+            "source_updated_at, sold_at FROM artwork_embeddings")).mappings().all()
         self.conn.commit()
         return {r["artwork_id"]: self._row(r) for r in rows}
 
     def get(self, artwork_id: str) -> Optional[dict]:
         r = self.conn.execute(text(
-            f"SELECT {self._COLS} FROM artwork_embeddings WHERE artwork_id = :id"),
+            "SELECT artwork_id, content_hash, source_content_updated_at, "
+            "source_updated_at, sold_at FROM artwork_embeddings WHERE artwork_id = :id"),
             {"id": artwork_id}).mappings().first()
         self.conn.commit()
         return self._row(r) if r else None
