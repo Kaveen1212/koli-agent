@@ -97,6 +97,18 @@ def catalogue_page(after: str | None = None, limit: int = 100) -> list[dict]:
     return _get("/internal/products/catalogue", params) or []
 
 
+def changes_page(since: int = 0, limit: int = 200) -> dict:
+    """One page of the catalogue change feed (docs/CATALOGUE_FEED.md in the backend).
+
+    Returns {items: [{seq, productId, op: UPSERT|DELETE, reason, contentUpdatedAt}],
+    nextSince, hasMore, lag}. Store nextSince only after the page is processed.
+    """
+    body = _get("/internal/products/changes", {"since": since, "limit": limit})
+    if not isinstance(body, dict) or "items" not in body or "nextSince" not in body:
+        raise BackendUnavailable("Backend returned an unexpected /changes body")
+    return body
+
+
 def absolute_media_url(path: str) -> str:
     """The backend stores uploads as "/uploads/..."; resolve against its origin.
 

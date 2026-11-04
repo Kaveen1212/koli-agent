@@ -50,7 +50,19 @@ def test_migration_is_the_single_head():
     from alembic.script import ScriptDirectory
     cfg = Config(str(ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(ROOT / "migrations"))
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["a01c5e7d9b21"]
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["a04d7b3e9c52"]
+
+
+def test_a04_follows_a01_and_adds_the_feed_columns_and_state_table():
+    path = next((ROOT / "migrations" / "versions").glob("a04d7b3e9c52_*.py"))
+    spec = importlib.util.spec_from_file_location("a04_migration", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.down_revision == "a01c5e7d9b21"
+    src = path.read_text()
+    for needle in ("content_hash CHAR(64)", "source_content_updated_at TIMESTAMPTZ",
+                   "agent.index_state", "feed_cursor"):
+        assert needle in src
 
 
 def test_emergency_script_covers_every_table_and_restamps_the_version():

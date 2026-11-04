@@ -106,11 +106,26 @@ COST_PER_GENERATION: float = float(os.getenv("COST_PER_GENERATION", "0.039"))
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2")
 EMBEDDING_DIM:   int = int(os.getenv("EMBEDDING_DIM", "3072"))
 
-# Background catalogue indexing (services/indexer.py): how often new or edited
-# products are embedded for search, and the most embeddings one pass may create
-# so a bulk import can't spike Gemini spend. 0 turns the indexer off.
-INDEX_INTERVAL_SECONDS: int = int(os.getenv("INDEX_INTERVAL_SECONDS", "600"))
+# Background catalogue indexing (services/indexer.py). The indexer follows the
+# backend's change feed (GET /v1/internal/products/changes), so a poll is one cheap
+# request and the default is 60 s (it was 600 s when every pass walked the whole
+# catalogue). INDEX_MAX_PER_RUN caps the embeddings one pass may create so a bulk
+# import can't spike Gemini spend; the cursor stops there and the next pass resumes.
+# 0 turns the indexer off.
+INDEX_INTERVAL_SECONDS: int = int(os.getenv("INDEX_INTERVAL_SECONDS", "60"))
 INDEX_MAX_PER_RUN:      int = int(os.getenv("INDEX_MAX_PER_RUN", "100"))
+# A full catalogue walk (resync) heals anything the feed missed (a transaction
+# that committed after the backend's 10 s safety window, a failed embedding) and
+# prunes vectors for products that are no longer sellable. Also runs on first
+# start and whenever the cursor is in doubt or older than INDEX_FEED_STALE_DAYS
+# (the backend purges feed rows at 30 days).
+INDEX_RESYNC_HOURS:     float = float(os.getenv("INDEX_RESYNC_HOURS", "24"))
+INDEX_FEED_STALE_DAYS:  float = float(os.getenv("INDEX_FEED_STALE_DAYS", "25"))
+# A SOLD product's vector is kept this many days before it is dropped (it stays
+# out of search either way: the backend never returns sold work to the agent). A
+# relist inside the window then costs no embedding. 0 (default) drops it at once.
+# Every other removal reason drops the vector immediately.
+INDEX_SOLD_GRACE_DAYS:  float = float(os.getenv("INDEX_SOLD_GRACE_DAYS", "0"))
 
 # Image generation / vision model names.
 IMAGE_MODEL:  str = os.getenv("IMAGE_MODEL", "gemini-3.1-flash-image")

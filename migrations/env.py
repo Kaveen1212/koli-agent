@@ -11,9 +11,9 @@ from alembic import context
 # Load .env so DATABASE_URL is available here just as it is for the app.
 load_dotenv()
 from app.database import Base
-from app.models import room_upload, artwork_embedding, chat_session, generation
+from app.models import room_upload, artwork_embedding, chat_session, generation, index_state
 
-AGENT_TABLES = {"artwork_embeddings", "chat_sessions", "room_uploads", "generations"}
+AGENT_TABLES = {"artwork_embeddings", "chat_sessions", "room_uploads", "generations", "index_state"}
 
 def include_object(object, name, type_, reflected, compare_to):
     if type_ == "table" and name not in AGENT_TABLES:

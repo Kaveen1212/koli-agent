@@ -1,7 +1,5 @@
 """Unit tests for the paid-generation guards, empty-reply recovery and the
 catalogue indexer. Everything external (database, Gemini, backend) is mocked."""
-from datetime import datetime, timezone
-
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
@@ -215,12 +213,16 @@ def test_user_id_is_passed_to_the_graph_config(chat, monkeypatch):
 
 # ── indexer ─────────────────────────────────────────────────────────────────
 
-def test_indexer_embeds_new_and_edited_products_only():
-    embedded_at = datetime(2026, 9, 30, 8, 0, tzinfo=timezone.utc)
-    known = {"same": embedded_at, "edited": embedded_at}
-    assert indexer._needs_embedding({"id": "new", "updatedAt": "2026-09-30T07:00:00.000Z"}, known)
-    assert indexer._needs_embedding({"id": "edited", "updatedAt": "2026-09-30T09:00:00.000Z"}, known)
-    assert not indexer._needs_embedding({"id": "same", "updatedAt": "2026-09-30T08:00:00.000Z"}, known)
+def test_indexer_content_hash_covers_only_what_the_embedding_reads():
+    base = {"id": "p", "title": "T", "description": "D", "category": "C", "medium": "M",
+            "images": ["/uploads/a.webp", "/uploads/b.webp"]}
+    h = indexer.content_hash(base)
+    assert len(h) == 64
+    # price, stock, size, seller and the second image never reach the embedding
+    assert indexer.content_hash({**base, "price": 9, "stock": 1, "size": "1x1",
+                                 "images": ["/uploads/a.webp"]}) == h
+    assert indexer.content_hash({**base, "title": "T2"}) != h
+    assert indexer.content_hash({**base, "images": ["/uploads/other.webp"]}) != h
 
 
 def test_upload_paths_resolve_to_the_backend(monkeypatch):

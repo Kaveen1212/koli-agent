@@ -47,11 +47,18 @@ INDEX_RUNS = Counter("koli_agent_index_runs_total", "Catalogue indexer passes.",
                      ["result"], registry=REGISTRY)
 INDEX_LAST_SUCCESS = Gauge(
     "koli_agent_index_last_success_timestamp_seconds",
-    "Unix time the indexer last finished a pass (0 = never since start).", registry=REGISTRY)
+    "Unix time the indexer was last fully caught up with the catalogue change feed "
+    "(0 = never since start).", registry=REGISTRY)
 INDEX_PENDING = Gauge(
     "koli_agent_index_pending_products",
     "Products seen needing an embedding after the last pass (lower bound when the "
     "per-run cap stopped the scan).", registry=REGISTRY)
+INDEX_EMBEDS = Counter("koli_agent_index_embeddings_total",
+                       "Products embedded by the indexer (each is a paid Gemini call).",
+                       registry=REGISTRY)
+INDEX_PRUNED = Counter("koli_agent_index_pruned_total",
+                       "Vectors removed because the product stopped being sellable.",
+                       ["reason"], registry=REGISTRY)
 _PROCESS_START = time.time()
 
 # p95 over the most recent turns: the histogram gives Prometheus the full
@@ -85,8 +92,10 @@ class _DerivedCollector:
         last = INDEX_LAST_SUCCESS._value.get()
         lag = GaugeMetricFamily(
             "koli_agent_index_lag_seconds",
-            "Seconds since the indexer last finished a pass (since process start "
-            "if it has not yet).")
+            "Seconds since the indexer was last fully caught up with the catalogue "
+            "change feed (excluding the backend's ~10 s safety window); since process "
+            "start if it has not been yet. A pass stopped by INDEX_MAX_PER_RUN or an "
+            "error does not reset it.")
         lag.add_metric([], time.time() - (last or _PROCESS_START))
         yield lag
 
@@ -108,8 +117,13 @@ def record_index_run(stats: Optional[dict], failed: bool) -> None:
         return
     INDEX_RUNS.labels(result="skipped" if stats.get("skipped") else "ok").inc()
     if not stats.get("skipped"):
-        INDEX_LAST_SUCCESS.set(time.time())
+        if stats.get("caught_up", True):
+            INDEX_LAST_SUCCESS.set(time.time())
         INDEX_PENDING.set(max(0, stats.get("needs", 0) - stats.get("embedded", 0)))
+        if stats.get("embedded"):
+            INDEX_EMBEDS.inc(stats["embedded"])
+        for reason, n in (stats.get("pruned_reasons") or {}).items():
+            INDEX_PRUNED.labels(reason=reason).inc(n)
 
 
 # --- identity and request id -------------------------------------------------

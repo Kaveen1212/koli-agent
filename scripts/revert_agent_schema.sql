@@ -2,7 +2,11 @@
 -- tables and its alembic_version table back into `public`, exactly where the
 -- pre-A01 image expects them.
 --
--- Prefer `alembic downgrade -1` (same effect, run from the new image). Use this
+-- A04 (a04d7b3e9c52: feed columns and agent.index_state) may be applied too: its
+-- additions are inert for older images and its upgrade is idempotent, so the
+-- script just re-stamps past it. `agent.index_state` stays in the `agent` schema.
+--
+-- Prefer `alembic downgrade b7c1d2e3f4a5` (same effect, run from the new image). Use this
 -- script when the new image cannot start. Run it with the agent STOPPED:
 --
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/revert_agent_schema.sql
@@ -27,7 +31,7 @@ ALTER TABLE IF EXISTS agent.alembic_version    SET SCHEMA public;
 -- `alembic upgrade head` would think A01 is applied and skip the move.
 UPDATE public.alembic_version
 SET version_num = 'b7c1d2e3f4a5'
-WHERE version_num = 'a01c5e7d9b21';
+WHERE version_num IN ('a01c5e7d9b21', 'a04d7b3e9c52');
 
 COMMIT;
 

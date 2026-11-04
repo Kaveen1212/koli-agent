@@ -32,6 +32,7 @@ def _nearest_ids(query_vector: list[float], limit: int) -> list[str]:
                 """
                 SELECT artwork_id
                 FROM artwork_embeddings
+                WHERE sold_at IS NULL
                 ORDER BY text_vector <=> CAST(:vec AS vector)
                 LIMIT :limit
                 """
